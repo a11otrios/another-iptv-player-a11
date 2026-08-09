@@ -1,5 +1,6 @@
 import 'package:another_iptv_player/l10n/localization_extension.dart';
 import 'package:another_iptv_player/models/category_view_model.dart';
+import 'package:another_iptv_player/models/category.dart';
 import 'package:another_iptv_player/models/category_type.dart';
 import 'package:another_iptv_player/models/content_type.dart';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
@@ -10,6 +11,7 @@ import 'package:another_iptv_player/screens/xtream-codes/xtream_code_data_loader
 import 'package:another_iptv_player/services/app_state.dart';
 import 'package:flutter/material.dart';
 import 'package:another_iptv_player/utils/radio_station_filter.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 
 class XtreamCodeHomeController extends ChangeNotifier {
   late PageController _pageController;
@@ -113,9 +115,10 @@ class XtreamCodeHomeController extends ChangeNotifier {
       final liveCategories = await _repository.getLiveCategories();
       if (liveCategories != null && liveCategories.isNotEmpty) {
         for (final liveCategory in liveCategories) {
+          final sort = await _itemSort(liveCategory);
           final liveStreams = await _repository.getLiveChannelsByCategoryId(
             categoryId: liveCategory.categoryId,
-            top: 10,
+            top: sort == CategoryItemSort.provider ? 10 : null,
           );
 
           if (liveStreams == null || liveStreams.isEmpty) continue;
@@ -123,17 +126,20 @@ class XtreamCodeHomeController extends ChangeNotifier {
           _liveCategories.add(
             CategoryViewModel(
               category: liveCategory,
-              contentItems: liveStreams
-                  .map(
-                    (x) => ContentItem(
-                      x.streamId,
-                      x.name,
-                      x.streamIcon,
-                      ContentType.liveStream,
-                      liveStream: x,
-                    ),
-                  )
-                  .toList(),
+              contentItems: sortCategoryItems(
+                liveStreams
+                    .map(
+                      (x) => ContentItem(
+                        x.streamId,
+                        x.name,
+                        x.streamIcon,
+                        ContentType.liveStream,
+                        liveStream: x,
+                      ),
+                    )
+                    .toList(),
+                sort,
+              ).take(10).toList(),
             ),
           );
         }
@@ -142,9 +148,10 @@ class XtreamCodeHomeController extends ChangeNotifier {
       final movieCategories = await _repository.getVodCategories();
       if (movieCategories != null && movieCategories.isNotEmpty) {
         for (final movieCategory in movieCategories) {
+          final sort = await _itemSort(movieCategory);
           final movies = await _repository.getMovies(
             categoryId: movieCategory.categoryId,
-            top: 10,
+            top: sort == CategoryItemSort.provider ? 10 : null,
           );
 
           if (movies == null || movies.isEmpty) {
@@ -154,18 +161,21 @@ class XtreamCodeHomeController extends ChangeNotifier {
           _movieCategories.add(
             CategoryViewModel(
               category: movieCategory,
-              contentItems: movies
-                  .map(
-                    (x) => ContentItem(
-                      x.streamId,
-                      x.name,
-                      x.streamIcon,
-                      ContentType.vod,
-                      containerExtension: x.containerExtension,
-                      vodStream: x,
-                    ),
-                  )
-                  .toList(),
+              contentItems: sortCategoryItems(
+                movies
+                    .map(
+                      (x) => ContentItem(
+                        x.streamId,
+                        x.name,
+                        x.streamIcon,
+                        ContentType.vod,
+                        containerExtension: x.containerExtension,
+                        vodStream: x,
+                      ),
+                    )
+                    .toList(),
+                sort,
+              ).take(10).toList(),
             ),
           );
         }
@@ -174,9 +184,10 @@ class XtreamCodeHomeController extends ChangeNotifier {
       final seriesCategories = await _repository.getSeriesCategories();
       if (seriesCategories != null && seriesCategories.isNotEmpty) {
         for (final seriesCategory in seriesCategories) {
+          final sort = await _itemSort(seriesCategory);
           final series = await _repository.getSeries(
             categoryId: seriesCategory.categoryId,
-            top: 10,
+            top: sort == CategoryItemSort.provider ? 10 : null,
           );
 
           if (series == null || series.isEmpty) {
@@ -186,17 +197,20 @@ class XtreamCodeHomeController extends ChangeNotifier {
           _seriesCategories.add(
             CategoryViewModel(
               category: seriesCategory,
-              contentItems: series
-                  .map(
-                    (x) => ContentItem(
-                      x.seriesId,
-                      x.name,
-                      x.cover ?? '',
-                      ContentType.series,
-                      seriesStream: x,
-                    ),
-                  )
-                  .toList(),
+              contentItems: sortCategoryItems(
+                series
+                    .map(
+                      (x) => ContentItem(
+                        x.seriesId,
+                        x.name,
+                        x.cover ?? '',
+                        ContentType.series,
+                        seriesStream: x,
+                      ),
+                    )
+                    .toList(),
+                sort,
+              ).take(10).toList(),
             ),
           );
         }
@@ -224,6 +238,14 @@ class XtreamCodeHomeController extends ChangeNotifier {
     if (notify) {
       notifyListeners();
     }
+  }
+
+  Future<CategoryItemSort> _itemSort(Category category) {
+    return UserPreferences.getCategoryItemSort(
+      playlistId: category.playlistId,
+      type: category.type,
+      categoryId: category.categoryId,
+    );
   }
 
   Future<void> reloadCategoryPreferences({bool notify = true}) async {

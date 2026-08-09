@@ -1,6 +1,7 @@
 import 'package:another_iptv_player/models/player_aspect_ratio_mode.dart';
 import 'package:another_iptv_player/models/category_type.dart';
 import 'package:another_iptv_player/repositories/user_preferences.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -174,6 +175,47 @@ void main() {
     expect(
       await UserPreferences.getHideRadioStations(playlistId: 'playlist-b'),
       isFalse,
+    );
+  });
+
+  test('category item sort is isolated and provider order clears it', () async {
+    await UserPreferences.setCategoryItemSort(
+      playlistId: 'playlist-a',
+      type: CategoryType.vod,
+      categoryId: 'children',
+      sort: CategoryItemSort.releaseDate,
+    );
+
+    expect(
+      await UserPreferences.getCategoryItemSort(
+        playlistId: 'playlist-a',
+        type: CategoryType.vod,
+        categoryId: 'children',
+      ),
+      CategoryItemSort.releaseDate,
+    );
+    expect(
+      await UserPreferences.getCategoryItemSort(
+        playlistId: 'playlist-b',
+        type: CategoryType.vod,
+        categoryId: 'children',
+      ),
+      CategoryItemSort.provider,
+    );
+
+    await UserPreferences.setCategoryItemSort(
+      playlistId: 'playlist-a',
+      type: CategoryType.vod,
+      categoryId: 'children',
+      sort: CategoryItemSort.provider,
+    );
+    expect(
+      await UserPreferences.getCategoryItemSort(
+        playlistId: 'playlist-a',
+        type: CategoryType.vod,
+        categoryId: 'children',
+      ),
+      CategoryItemSort.provider,
     );
   });
 }

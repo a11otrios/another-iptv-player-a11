@@ -725,6 +725,7 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
       '${result.channelNumbersAssigned} channel numbers assigned',
       '${result.hiddenCategoriesImported} hidden categories imported',
       '${result.categoryOrderImported} category positions imported',
+      '${result.categoryItemSortsImported} category item sorts imported',
       if (result.unmatchedNames.isNotEmpty)
         '${result.unmatchedNames.length} not found: '
             '${result.unmatchedNames.take(12).join(', ')}',

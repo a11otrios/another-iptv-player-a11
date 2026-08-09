@@ -17,6 +17,7 @@ import 'package:another_iptv_player/services/app_state.dart';
 import 'package:another_iptv_player/services/channel_shortcut_service.dart';
 import 'package:another_iptv_player/services/service_locator.dart';
 import 'package:uuid/uuid.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 
 class PortablePlaylistTransferService {
   PortablePlaylistTransferService({
@@ -38,6 +39,7 @@ class PortablePlaylistTransferService {
     final favorites = await _database.getFavoritesByPlaylist(playlist.id);
     final hiddenCategories = await _hiddenCategoryEntries(playlist.id);
     final categoryOrder = await _categoryOrderEntries(playlist.id);
+    final categoryItemSorts = await _categoryItemSortEntries(playlist.id);
     final hideRadioStations = await UserPreferences.getHideRadioStations(
       playlistId: playlist.id,
     );
@@ -81,6 +83,9 @@ class PortablePlaylistTransferService {
           .map((entry) => entry.toJson())
           .toList(),
       'categoryOrder': categoryOrder.map((entry) => entry.toJson()).toList(),
+      'categoryItemSorts': categoryItemSorts
+          .map((entry) => entry.toJson())
+          .toList(),
       'hideRadioStations': hideRadioStations,
     });
   }
@@ -106,6 +111,10 @@ class PortablePlaylistTransferService {
     final categoryOrderImported = await _importCategoryOrder(
       playlist.id,
       backup.categoryOrder,
+    );
+    final categoryItemSortsImported = await _importCategoryItemSorts(
+      playlist.id,
+      backup.categoryItemSorts,
     );
     if (backup.hideRadioStations != null) {
       await UserPreferences.setHideRadioStations(
@@ -192,6 +201,7 @@ class PortablePlaylistTransferService {
       channelNumbersAssigned: channelNumbersAssigned,
       hiddenCategoriesImported: hiddenCategoriesImported,
       categoryOrderImported: categoryOrderImported,
+      categoryItemSortsImported: categoryItemSortsImported,
       unmatchedNames: unmatched.toList()..sort(),
       ambiguousNames: ambiguous.toList()..sort(),
     );
@@ -290,6 +300,30 @@ class PortablePlaylistTransferService {
           ),
         );
       }
+    }
+    return entries;
+  }
+
+  Future<List<PortableCategoryItemSortEntry>> _categoryItemSortEntries(
+    String playlistId,
+  ) async {
+    final categories = await _database.getCategoriesByPlaylist(playlistId);
+    final entries = <PortableCategoryItemSortEntry>[];
+    for (final category in categories) {
+      final sort = await UserPreferences.getCategoryItemSort(
+        playlistId: playlistId,
+        type: category.type,
+        categoryId: category.categoryId,
+      );
+      if (sort == CategoryItemSort.provider) continue;
+      entries.add(
+        PortableCategoryItemSortEntry(
+          categoryId: category.categoryId,
+          categoryType: category.type,
+          name: category.categoryName,
+          sort: sort,
+        ),
+      );
     }
     return entries;
   }
@@ -423,6 +457,48 @@ class PortablePlaylistTransferService {
         type: type,
         categoryIds: orderedIds,
       );
+    }
+    return imported;
+  }
+
+  Future<int> _importCategoryItemSorts(
+    String playlistId,
+    List<PortableCategoryItemSortEntry> entries,
+  ) async {
+    if (entries.isEmpty) return 0;
+
+    final categories = await _database.getCategoriesByPlaylist(playlistId);
+    var imported = 0;
+    for (final entry in entries) {
+      final candidates = categories.where(
+        (category) => category.type == entry.categoryType,
+      );
+      Category? match;
+      for (final category in candidates) {
+        if (category.categoryId == entry.categoryId) {
+          match = category;
+          break;
+        }
+      }
+      if (match == null) {
+        final normalizedName = _normalizeCategoryName(entry.name);
+        final nameMatches = candidates
+            .where(
+              (category) =>
+                  _normalizeCategoryName(category.categoryName) ==
+                  normalizedName,
+            )
+            .toList();
+        if (nameMatches.length == 1) match = nameMatches.single;
+      }
+      if (match == null) continue;
+      await UserPreferences.setCategoryItemSort(
+        playlistId: playlistId,
+        type: match.type,
+        categoryId: match.categoryId,
+        sort: entry.sort,
+      );
+      imported++;
     }
     return imported;
   }
@@ -760,6 +836,7 @@ class PortablePlaylistBackup {
     required this.channelNumberPages,
     required this.hiddenCategories,
     required this.categoryOrder,
+    required this.categoryItemSorts,
     required this.hideRadioStations,
   });
 
@@ -768,6 +845,7 @@ class PortablePlaylistBackup {
   final Map<String, Map<int, PortableTransferEntry>> channelNumberPages;
   final List<PortableHiddenCategoryEntry> hiddenCategories;
   final List<PortableCategoryOrderEntry> categoryOrder;
+  final List<PortableCategoryItemSortEntry> categoryItemSorts;
   final bool? hideRadioStations;
 
   factory PortablePlaylistBackup.fromJsonString(String input) {
@@ -842,6 +920,19 @@ class PortablePlaylistBackup {
               .take(10000)
               .toList()
         : <PortableCategoryOrderEntry>[];
+    final categoryItemSortJson = json['categoryItemSorts'];
+    final categoryItemSorts = categoryItemSortJson is List
+        ? categoryItemSortJson
+              .whereType<Map>()
+              .map(
+                (entry) => PortableCategoryItemSortEntry.fromJson(
+                  Map<String, dynamic>.from(entry),
+                ),
+              )
+              .where((entry) => entry.categoryId.isNotEmpty)
+              .take(10000)
+              .toList()
+        : <PortableCategoryItemSortEntry>[];
 
     return PortablePlaylistBackup(
       sourcePlaylistId: sourceJson['id'] as String? ?? '',
@@ -849,6 +940,7 @@ class PortablePlaylistBackup {
       channelNumberPages: shortcutPages,
       hiddenCategories: hiddenCategories,
       categoryOrder: categoryOrder,
+      categoryItemSorts: categoryItemSorts,
       hideRadioStations: json['hideRadioStations'] is bool
           ? json['hideRadioStations'] as bool
           : null,
@@ -875,6 +967,36 @@ class PortablePlaylistBackup {
     }
     return shortcuts;
   }
+}
+
+class PortableCategoryItemSortEntry {
+  const PortableCategoryItemSortEntry({
+    required this.categoryId,
+    required this.categoryType,
+    required this.name,
+    required this.sort,
+  });
+
+  final String categoryId;
+  final CategoryType categoryType;
+  final String name;
+  final CategoryItemSort sort;
+
+  factory PortableCategoryItemSortEntry.fromJson(Map<String, dynamic> json) {
+    return PortableCategoryItemSortEntry(
+      categoryId: json['categoryId'] as String? ?? '',
+      categoryType: CategoryType.fromString(json['type'] as String? ?? ''),
+      name: json['name'] as String? ?? '',
+      sort: CategoryItemSort.fromPreference(json['sort'] as String?),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'categoryId': categoryId,
+    'type': categoryType.value,
+    'name': name,
+    'sort': sort.name,
+  };
 }
 
 class PortableCategoryOrderEntry {
@@ -996,6 +1118,7 @@ class PortableImportResult {
     required this.channelNumbersAssigned,
     required this.hiddenCategoriesImported,
     required this.categoryOrderImported,
+    required this.categoryItemSortsImported,
     required this.unmatchedNames,
     required this.ambiguousNames,
   });
@@ -1005,6 +1128,7 @@ class PortableImportResult {
   final int channelNumbersAssigned;
   final int hiddenCategoriesImported;
   final int categoryOrderImported;
+  final int categoryItemSortsImported;
   final List<String> unmatchedNames;
   final List<String> ambiguousNames;
 

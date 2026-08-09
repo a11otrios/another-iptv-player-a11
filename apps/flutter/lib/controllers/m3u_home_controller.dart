@@ -10,6 +10,7 @@ import 'package:another_iptv_player/repositories/user_preferences.dart';
 import 'package:another_iptv_player/services/app_state.dart';
 import 'package:flutter/material.dart';
 import 'package:another_iptv_player/utils/radio_station_filter.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 
 class M3UHomeController extends ChangeNotifier {
   late PageController _pageController;
@@ -149,10 +150,15 @@ class M3UHomeController extends ChangeNotifier {
       await reloadHiddenCategories(notify: false);
       var categories = await _repository.getCategories();
       for (var category in categories!) {
+        final sort = await UserPreferences.getCategoryItemSort(
+          playlistId: category.playlistId,
+          type: category.type,
+          categoryId: category.categoryId,
+        );
         if (category.type != CategoryType.series) {
           var m3uItems = await _repository.getM3uItemsByCategoryId(
             categoryId: category.categoryId,
-            top: 10,
+            top: sort == CategoryItemSort.provider ? 10 : null,
           );
 
           late CategoryViewModel categoryViewModel;
@@ -164,15 +170,18 @@ class M3UHomeController extends ChangeNotifier {
           } else {
             categoryViewModel = CategoryViewModel(
               category: category,
-              contentItems: m3uItems.map((x) {
-                return ContentItem(
-                  x.url,
-                  x.name ?? '',
-                  x.tvgLogo ?? '',
-                  x.contentType,
-                  m3uItem: x,
-                );
-              }).toList(),
+              contentItems: sortCategoryItems(
+                m3uItems.map((x) {
+                  return ContentItem(
+                    x.url,
+                    x.name ?? '',
+                    x.tvgLogo ?? '',
+                    x.contentType,
+                    m3uItem: x,
+                  );
+                }),
+                sort,
+              ).take(10).toList(),
             );
           }
 
@@ -187,7 +196,7 @@ class M3UHomeController extends ChangeNotifier {
         } else {
           var series = await _repository.getSeriesByCategoryId(
             categoryId: category.categoryId,
-            top: 10,
+            top: sort == CategoryItemSort.provider ? 10 : null,
           );
 
           late CategoryViewModel categoryViewModel;
@@ -199,9 +208,17 @@ class M3UHomeController extends ChangeNotifier {
           } else {
             categoryViewModel = CategoryViewModel(
               category: category,
-              contentItems: series.map((x) {
-                return ContentItem(x.seriesId, x.name, '', ContentType.series);
-              }).toList(),
+              contentItems: sortCategoryItems(
+                series.map((x) {
+                  return ContentItem(
+                    x.seriesId,
+                    x.name,
+                    '',
+                    ContentType.series,
+                  );
+                }),
+                sort,
+              ).take(10).toList(),
             );
           }
 

@@ -13,6 +13,7 @@ import 'package:another_iptv_player/repositories/user_preferences.dart';
 import 'package:another_iptv_player/services/app_state.dart';
 import 'package:another_iptv_player/services/channel_shortcut_service.dart';
 import 'package:another_iptv_player/services/portable_playlist_transfer_service.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -586,6 +587,56 @@ void main() {
         ['sports', 'greek'],
       );
     });
+
+    test(
+      'exports and imports category item sorts across changed IDs',
+      () async {
+        await UserPreferences.setCategoryItemSort(
+          playlistId: playlist.id,
+          type: CategoryType.vod,
+          categoryId: 'movies',
+          sort: CategoryItemSort.releaseDate,
+        );
+        final service = PortablePlaylistTransferService(
+          database: database,
+          shortcutStore: shortcutStore,
+        );
+        final decoded =
+            jsonDecode(await service.exportCurrentPlaylist())
+                as Map<String, dynamic>;
+        final sorts = (decoded['categoryItemSorts'] as List)
+            .cast<Map<String, dynamic>>();
+        expect(sorts, [
+          {
+            'categoryId': 'movies',
+            'type': 'vod',
+            'name': 'Movies',
+            'sort': 'releaseDate',
+          },
+        ]);
+
+        sorts.single['categoryId'] = 'source-movies';
+        await UserPreferences.setCategoryItemSort(
+          playlistId: playlist.id,
+          type: CategoryType.vod,
+          categoryId: 'movies',
+          sort: CategoryItemSort.provider,
+        );
+        final result = await service.importIntoCurrentPlaylist(
+          jsonEncode(decoded),
+        );
+
+        expect(result.categoryItemSortsImported, 1);
+        expect(
+          await UserPreferences.getCategoryItemSort(
+            playlistId: playlist.id,
+            type: CategoryType.vod,
+            categoryId: 'movies',
+          ),
+          CategoryItemSort.releaseDate,
+        );
+      },
+    );
   });
 }
 

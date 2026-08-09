@@ -5,6 +5,7 @@ import 'package:another_iptv_player/models/player_aspect_ratio_mode.dart';
 import 'package:another_iptv_player/models/subtitle_search_result.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 
 class UserPreferences {
   static const String subtitleOff = '__off__';
@@ -28,6 +29,7 @@ class UserPreferences {
   static const String _hiddenCategoriesPrefix = 'hidden_categories.';
   static const String _categoryOrderPrefix = 'category_order.';
   static const String _categoryOriginalOrderPrefix = 'category_original_order.';
+  static const String _categoryItemSortPrefix = 'category_item_sort.';
   static const String _hideRadioStationsPrefix = 'hide_radio_stations.';
   static const String _keyThemeMode = 'theme_mode';
   static const String _keyBrightnessGesture = 'brightness_gesture';
@@ -455,6 +457,34 @@ class UserPreferences {
         const [];
   }
 
+  static Future<void> setCategoryItemSort({
+    required String playlistId,
+    required CategoryType type,
+    required String categoryId,
+    required CategoryItemSort sort,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _categoryItemSortPreferenceKey(playlistId, type, categoryId);
+    if (sort == CategoryItemSort.provider) {
+      await prefs.remove(key);
+    } else {
+      await prefs.setString(key, sort.name);
+    }
+  }
+
+  static Future<CategoryItemSort> getCategoryItemSort({
+    required String playlistId,
+    required CategoryType type,
+    required String categoryId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    return CategoryItemSort.fromPreference(
+      prefs.getString(
+        _categoryItemSortPreferenceKey(playlistId, type, categoryId),
+      ),
+    );
+  }
+
   static Future<List<String>> syncCategoryOriginalOrder({
     required String playlistId,
     required CategoryType type,
@@ -523,6 +553,20 @@ class UserPreferences {
         .encode(utf8.encode(playlistId))
         .replaceAll('=', '');
     return '$prefix$encodedId.${type.value}';
+  }
+
+  static String _categoryItemSortPreferenceKey(
+    String playlistId,
+    CategoryType type,
+    String categoryId,
+  ) {
+    final encodedPlaylistId = base64Url
+        .encode(utf8.encode(playlistId))
+        .replaceAll('=', '');
+    final encodedCategoryId = base64Url
+        .encode(utf8.encode(categoryId))
+        .replaceAll('=', '');
+    return '$_categoryItemSortPrefix$encodedPlaylistId.${type.value}.$encodedCategoryId';
   }
 
   static bool _sameStrings(List<String> first, List<String> second) {

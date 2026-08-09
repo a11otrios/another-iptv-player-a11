@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:another_iptv_player/models/category_view_model.dart';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
 import '../services/content_service.dart';
+import '../repositories/user_preferences.dart';
+import '../utils/category_item_sort.dart';
 
 class CategoryDetailController extends ChangeNotifier {
   final CategoryViewModel category;
@@ -17,6 +19,7 @@ class CategoryDetailController extends ChangeNotifier {
   bool _isLoading = true;
   bool _isSearching = false;
   String? _errorMessage;
+  CategoryItemSort _sort = CategoryItemSort.provider;
 
   // --- Genre filtering ---
   List<String> _genres = [];
@@ -25,8 +28,10 @@ class CategoryDetailController extends ChangeNotifier {
   // --- Getters ---
   List<ContentItem> get contentItems => _contentItems;
   List<ContentItem> get filteredItems => _filteredItems;
-  List<ContentItem> get displayItems =>
-      _isSearching ? _filteredItems : _applyGenreFilter(_contentItems);
+  List<ContentItem> get displayItems => sortCategoryItems(
+    _isSearching ? _filteredItems : _applyGenreFilter(_contentItems),
+    _sort,
+  );
   bool get isLoading => _isLoading;
   bool get isSearching => _isSearching;
   String? get errorMessage => _errorMessage;
@@ -34,13 +39,20 @@ class CategoryDetailController extends ChangeNotifier {
 
   List<String> get genres => _genres;
   String? get selectedGenre => _selectedGenre;
+  CategoryItemSort get sort => _sort;
 
   Future<void> loadContent() async {
     try {
       _setLoading(true);
       _contentItems = await _contentService.fetchContentByCategory(category);
+      _sort = await UserPreferences.getCategoryItemSort(
+        playlistId: category.category.playlistId,
+        type: category.category.type,
+        categoryId: category.category.categoryId,
+      );
       _genres = _extractGenres(_contentItems);
       _selectedGenre = null;
+      _updateCategoryPreview();
       _setLoading(false);
     } catch (error) {
       _setError(error.toString());
@@ -115,54 +127,32 @@ class CategoryDetailController extends ChangeNotifier {
       _filteredItems = [];
     } else {
       _filteredItems = _contentItems
-          .where((item) =>
-          (item.name ?? '').toLowerCase().contains(query.trim().toLowerCase()))
+          .where(
+            (item) =>
+                item.name.toLowerCase().contains(query.trim().toLowerCase()),
+          )
           .toList();
     }
     notifyListeners();
   }
 
-  void sortItems(String order) {
-    final list = displayItems;
-
-    switch (order) {
-      case "ascending":
-        list.sort((a, b) => (a.name ?? '').compareTo(b.name ?? ''));
-        break;
-      case "descending":
-        list.sort((a, b) => (b.name ?? '').compareTo(a.name ?? ''));
-        break;
-      case "release_date":
-        list.sort((a, b) {
-          final dateA;
-          final dateB;
-          if (a.contentType.name == "series") {
-            dateA = DateTime.tryParse(a.seriesStream?.releaseDate ?? '') ?? DateTime(1970);
-            dateB = DateTime.tryParse(b.seriesStream?.releaseDate ?? '') ?? DateTime(1970);
-          } else {
-            dateA = a.vodStream?.createdAt?.millisecondsSinceEpoch.toDouble() ?? 0.0;
-            dateB = b.vodStream?.createdAt?.millisecondsSinceEpoch.toDouble() ?? 0.0;
-          }
-          return dateB.compareTo(dateA);
-        });
-        break;
-      case "rating":
-        list.sort((a, b) {
-          final ratingA;
-          final ratingB;
-          if (a.contentType.name == "series") {
-            ratingA = double.tryParse(a.seriesStream?.rating ?? '0') ?? 0.0;
-            ratingB = double.tryParse(b.seriesStream?.rating ?? '0') ?? 0.0;
-          } else {
-            ratingA = double.tryParse(a.vodStream?.rating ?? '0') ?? 0.0;
-            ratingB = double.tryParse(b.vodStream?.rating ?? '0') ?? 0.0;
-          }
-          return ratingB.compareTo(ratingA);
-        });
-        break;
-    }
-
+  Future<void> sortItems(CategoryItemSort sort) async {
+    _sort = sort;
+    await UserPreferences.setCategoryItemSort(
+      playlistId: category.category.playlistId,
+      type: category.category.type,
+      categoryId: category.category.categoryId,
+      sort: sort,
+    );
+    _updateCategoryPreview();
     notifyListeners();
+  }
+
+  void _updateCategoryPreview() {
+    final sorted = sortCategoryItems(_contentItems, _sort);
+    category.contentItems
+      ..clear()
+      ..addAll(sorted.take(10));
   }
 
   // --- State helpers ---
