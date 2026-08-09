@@ -20,6 +20,7 @@ const EXTEND_THRESHOLD = 8;
 const ShelfScrollContext = createContext<(el: HTMLElement) => void>(() => {});
 /** Focus key of the shelf's header button (null → header not focusable). */
 const ShelfHeaderContext = createContext<string | null>(null);
+const ShelfImagePreloadContext = createContext(false);
 
 export function useShelfScroll(): (el: HTMLElement) => void {
   return useContext(ShelfScrollContext);
@@ -27,6 +28,10 @@ export function useShelfScroll(): (el: HTMLElement) => void {
 
 export function useShelfHeaderKey(): string | null {
   return useContext(ShelfHeaderContext);
+}
+
+export function useShelfImagePreload(): boolean {
+  return useContext(ShelfImagePreloadContext);
 }
 
 /**
@@ -41,11 +46,13 @@ export function Shelf({
   onRowFocused,
   onHeaderSelect,
   onEdgeLeft,
+  preloadImages = false,
 }: {
   title: string;
   children: ReactNode;
   onRowFocused?: () => void;
   onHeaderSelect?: () => void;
+  preloadImages?: boolean;
   /** ← past the row's left edge (header, or first card when no header). */
   onEdgeLeft?: () => void;
 }) {
@@ -160,7 +167,14 @@ export function Shelf({
               <ShelfHeaderContext.Provider
                 value={onHeaderSelect ? header.focusKey : null}
               >
-                {shown}
+                {shown.map((child, index) => (
+                  <ShelfImagePreloadContext.Provider
+                    key={index}
+                    value={preloadImages && index < 8}
+                  >
+                    {child}
+                  </ShelfImagePreloadContext.Provider>
+                ))}
               </ShelfHeaderContext.Provider>
             </ShelfScrollContext.Provider>
           </div>

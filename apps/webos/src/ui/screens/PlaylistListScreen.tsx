@@ -15,7 +15,7 @@ import { Button } from "../components/TextField";
 import { Modal } from "../components/Modal";
 import { seedDemoPlaylist } from "../../dev/demoSeed";
 import { ServerClient } from "../../api/serverClient";
-import { syncServerLibrary } from "../../data/serverSync";
+import { serverSyncErrorKey, syncServerLibrary } from "../../data/serverSync";
 
 function PlaylistRow({
   playlist,
@@ -144,7 +144,7 @@ export function PlaylistListScreen() {
               setSyncError(null);
               void syncServerLibrary(client, (progress) => setSyncProgress(progress.loaded))
                 .then(reload)
-                .catch((error: Error) => setSyncError(error.message))
+                .catch((error: unknown) => setSyncError(t(serverSyncErrorKey(error))))
                 .finally(() => setSyncing(false));
             }}
           />

@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ServerCategory, ServerClient, ServerItem } from "../src/api/serverClient";
 import { bulkPut, getDb, resetDbForTests } from "../src/data/db";
 import { PlaylistRecord } from "../src/data/records";
-import { filterHiddenItems, syncServerLibrary } from "../src/data/serverSync";
+import {
+  filterHiddenItems,
+  serverSyncErrorKey,
+  syncServerLibrary,
+} from "../src/data/serverSync";
 import { serverItemToRecord } from "../src/data/serverCatalog";
 
 beforeEach(() => {
@@ -89,7 +93,15 @@ describe("server catalog filtering", () => {
       },
     } as unknown as ServerClient;
 
-    await expect(syncServerLibrary(client)).rejects.toThrow("desktop disconnected");
+    const failure = await syncServerLibrary(client).catch((error) => error);
+    expect(failure).toMatchObject({
+      name: "ServerSyncError",
+      stage: "categories",
+      cause: expect.objectContaining({ message: "desktop disconnected" }),
+    });
+    expect(serverSyncErrorKey(failure)).toBe(
+      "tv.desktop.sync_error.categories",
+    );
     expect((await db.get("playlists", "p"))?.name).toBe("Cached library");
     expect((await db.getAll("liveStreams")).map((item) => item.name)).toEqual([
       "Cached channel",

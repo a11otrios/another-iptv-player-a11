@@ -18,8 +18,43 @@ export interface ServerSyncProgress {
   total: number;
 }
 
+export type ServerSyncStage =
+  | "connection"
+  | "categories"
+  | "state"
+  | "preferences"
+  | "storage";
+
+export class ServerSyncError extends Error {
+  constructor(
+    readonly stage: ServerSyncStage,
+    readonly cause: unknown,
+  ) {
+    super(`Desktop sync failed during ${stage}`);
+    this.name = "ServerSyncError";
+  }
+}
+
+export function serverSyncErrorKey(error: unknown): string {
+  return error instanceof ServerSyncError
+    ? `tv.desktop.sync_error.${error.stage}`
+    : "tv.desktop.sync_error.unknown";
+}
+
+async function syncStage<T>(
+  stage: ServerSyncStage,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof ServerSyncError) throw error;
+    throw new ServerSyncError(stage, error);
+  }
+}
+
 let activeSync: Promise<PlaylistRecord[]> | null = null;
-let serverCatalogMigrationDone = false;
+const SERVER_CATALOG_MIGRATION_VERSION = 1;
 const progressListeners = new Set<(progress: ServerSyncProgress) => void>();
 
 export function syncServerLibrary(
@@ -39,11 +74,11 @@ export function syncServerLibrary(
 }
 
 async function performServerSync(client: ServerClient): Promise<PlaylistRecord[]> {
-  const db = await getDb();
+  const db = await syncStage("storage", getDb);
   // Older builds allowed hundreds of unbounded poster blobs. Reclaim that
   // space before writing desktop state so quota failures self-heal on launch.
-  await pruneImageCache(db);
-  const remote = await client.playlists();
+  await syncStage("storage", () => pruneImageCache(db));
+  const remote = await syncStage("connection", () => client.playlists());
   const playlists: PlaylistRecord[] = remote.map((item) => ({
     id: item.id,
     name: item.name,
@@ -60,13 +95,15 @@ async function performServerSync(client: ServerClient): Promise<PlaylistRecord[]
   const existing = await db.getAll("playlists");
   const remoteIds = new Set(playlists.map((item) => item.id));
   for (const stale of existing.filter((item) => item.managedByServer && !remoteIds.has(item.id))) {
-    await deletePlaylistRows(db, stale.id, ["categories", "liveStreams", "vodStreams", "series", "seriesInfo", "vodInfo", "m3uChannels", "favorites", "watchHistory"]);
-    await db.delete("playlists", stale.id);
+    await syncStage("storage", async () => {
+      await deletePlaylistRows(db, stale.id, ["categories", "liveStreams", "vodStreams", "series", "seriesInfo", "vodInfo", "m3uChannels", "favorites", "watchHistory"]);
+      await db.delete("playlists", stale.id);
+    });
   }
 
   for (const playlist of playlists) {
     await syncPlaylist(client, playlist);
-    await db.put("playlists", playlist);
+    await syncStage("storage", () => db.put("playlists", playlist));
   }
   return playlists;
 }
@@ -75,37 +112,44 @@ async function syncPlaylist(client: ServerClient, playlist: PlaylistRecord): Pro
   const db = await getDb();
   // Managed TVs retain the small navigation index; item pages stay on the
   // desktop and are fetched as shelves/categories are opened.
-  const snapshots = await Promise.all(
-    (["live", "vod", "series"] as CatalogKind[]).map(async (kind) => ({
-      kind,
-      categories: await client.categories(playlist.id, kind),
-    })),
+  const snapshots = await syncStage("categories", () =>
+    Promise.all(
+      (["live", "vod", "series"] as CatalogKind[]).map(async (kind) => ({
+        kind,
+        categories: await client.categories(playlist.id, kind),
+      })),
+    ),
   );
 
-  if (!serverCatalogMigrationDone) {
-    const existing = await db.getAll("playlists");
-    if (existing.length > 0 && existing.every((item) => item.managedByServer)) {
-      await clearCatalogStores(db);
+  await syncStage("storage", async () => {
+    if (settings.serverCatalogMigrationVersion < SERVER_CATALOG_MIGRATION_VERSION) {
+      const existing = await db.getAll("playlists");
+      if (existing.length > 0 && existing.every((item) => item.managedByServer)) {
+        await clearCatalogStores(db);
+        // Chromium 53 can briefly reject new writes while reclaimed IndexedDB
+        // pages are being accounted for after a large catalog clear.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      settings.serverCatalogMigrationVersion = SERVER_CATALOG_MIGRATION_VERSION;
     }
-    serverCatalogMigrationDone = true;
-  }
 
-  await deletePlaylistRows(db, playlist.id, ["categories", "liveStreams", "vodStreams", "series"]);
-  for (const { kind, categories } of snapshots) {
-    const visible = categories.filter((item) => !item.hidden);
-    const categoryRows: CategoryRecord[] = visible.map((item, index) => ({
-      id: `${playlist.id}_${kind}_${item.id}`,
-      playlistId: playlist.id,
-      kind,
-      categoryId: String(item.id),
-      name: item.name,
-      sortIndex: index,
-    }));
-    await bulkPut(db, "categories", categoryRows);
-  }
+    await deletePlaylistRows(db, playlist.id, ["categories", "liveStreams", "vodStreams", "series"]);
+    for (const { kind, categories } of snapshots) {
+      const visible = categories.filter((item) => !item.hidden);
+      const categoryRows: CategoryRecord[] = visible.map((item, index) => ({
+        id: `${playlist.id}_${kind}_${item.id}`,
+        playlistId: playlist.id,
+        kind,
+        categoryId: String(item.id),
+        name: item.name,
+        sortIndex: index,
+      }));
+      await bulkPut(db, "categories", categoryRows);
+    }
+  });
   await Promise.all([
-    syncState(client, playlist.id),
-    syncPreferences(client, playlist),
+    syncStage("state", () => syncState(client, playlist.id)),
+    syncStage("preferences", () => syncPreferences(client, playlist)),
   ]);
   invalidateCatalog(playlist.id);
   invalidateServerCatalog(playlist.id);

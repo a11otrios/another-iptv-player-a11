@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { FocusContext, useFocusable } from "@noriginmedia/norigin-spatial-navigation";
 import { ServerClient } from "../../api/serverClient";
-import { syncServerLibrary } from "../../data/serverSync";
+import {
+  ServerSyncError,
+  serverSyncErrorKey,
+  syncServerLibrary,
+} from "../../data/serverSync";
 import { settings } from "../../data/settings";
 import { useNavigation } from "../../navigation/NavigationStack";
 import { Button, TextField } from "../components/TextField";
@@ -44,7 +48,9 @@ export function AddPlaylistScreen() {
       replace({ name: "dashboard", playlist: first });
     } catch (reason) {
       setError(
-        reason instanceof Error && reason.message !== "Pairing failed"
+        reason instanceof ServerSyncError
+          ? t(serverSyncErrorKey(reason))
+          : reason instanceof Error && reason.message !== "Pairing failed"
           ? reason.message
           : t("add_playlist.auth_failed"),
       );

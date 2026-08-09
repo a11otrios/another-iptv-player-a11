@@ -358,6 +358,11 @@ export function WindowedRows({
                     onRowFocused={() => setFocusedRow(index)}
                     onHeaderSelect={row.onOpenCategory}
                     onEdgeLeft={onEdgeLeft}
+                    preloadImages={
+                      screenActive &&
+                      tabActive &&
+                      Math.abs(index - effectiveRow) <= 2
+                    }
                   >
                     {row.cards.map((card) => (
                       <ShelfCard

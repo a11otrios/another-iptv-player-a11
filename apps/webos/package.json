@@ -1,7 +1,7 @@
 {
   "name": "another-iptv-player-webos",
   "private": true,
-  "version": "1.7.2",
+  "version": "1.7.6",
   "description": "Another IPTV Player client for LG webOS TVs",
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "npm run build && node scripts/package-webos.mjs",
-    "deploy": "ares-install com.devyorg.anotheriptvplayer_1.7.2_all.ipk",
+    "deploy": "ares-install com.devyorg.anotheriptvplayer_1.7.6_all.ipk",
     "tv:smoke": "node scripts/tv-smoke.mjs",
     "i18n": "node scripts/convert-strings.mjs"
   },

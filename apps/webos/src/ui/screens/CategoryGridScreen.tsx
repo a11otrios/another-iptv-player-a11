@@ -305,6 +305,7 @@ export function CategoryGridScreen({
                   shape={shape}
                   onSelect={item.onSelect}
                   onFocusedElement={onCardFocused}
+                  preloadImage
                 />
               ) : (
                 <DormantCard key={item.id} title={item.title} shape={shape} />

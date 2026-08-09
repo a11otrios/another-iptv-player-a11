@@ -36,6 +36,7 @@ interface SettingsShape {
   preferredAudioLanguage: string | null;
   preferredSubtitleLanguage: string | null;
   subtitleStyle: SubtitleStylePreference;
+  serverCatalogMigrationVersion: number;
 }
 
 const DEFAULTS: SettingsShape = {
@@ -47,6 +48,7 @@ const DEFAULTS: SettingsShape = {
   preferredAudioLanguage: null,
   preferredSubtitleLanguage: null,
   subtitleStyle: DEFAULT_SUBTITLE_STYLE,
+  serverCatalogMigrationVersion: 0,
 };
 
 function read<K extends keyof SettingsShape>(key: K): SettingsShape[K] {
@@ -122,5 +124,11 @@ export const settings = {
   },
   set subtitleStyle(value: SubtitleStylePreference) {
     write("subtitleStyle", value);
+  },
+  get serverCatalogMigrationVersion() {
+    return read("serverCatalogMigrationVersion");
+  },
+  set serverCatalogMigrationVersion(value: number) {
+    write("serverCatalogMigrationVersion", value);
   },
 };

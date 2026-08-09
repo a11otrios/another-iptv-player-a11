@@ -74,15 +74,16 @@ export function PosterImage({
     };
   }, []);
 
+  const activeEager = eager && layerActive;
   useEffect(() => {
-    if (eager) setVisible(true);
-  }, [eager]);
+    if (activeEager) setVisible(true);
+  }, [activeEager]);
 
-  const resolved = useCachedImage(src, visible || eager);
+  const resolved = useCachedImage(src, visible || activeEager);
   // Fade the artwork in once decoded — hard pops read as "instant loading".
   const [loaded, setLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  const showImage = (visible || eager) && !!resolved && !failed;
+  const showImage = (visible || activeEager) && !!resolved && !failed;
   useEffect(() => {
     // Already-cached images can complete before React's onLoad listener sees
     // the event (e.g. remounting after Back) — without this check they would
@@ -90,7 +91,7 @@ export function PosterImage({
     const img = imgRef.current;
     setFailed(false);
     setLoaded(!!img && img.complete && img.naturalWidth > 0);
-  }, [resolved, visible, eager]);
+  }, [resolved, visible, activeEager]);
 
   return (
     <div
@@ -104,7 +105,7 @@ export function PosterImage({
           ref={imgRef}
           src={resolved}
           alt={alt}
-          loading="lazy"
+          loading={activeEager ? "eager" : "lazy"}
           className={loaded ? "loaded" : undefined}
           onLoad={() => setLoaded(true)}
           onError={() => setFailed(true)}

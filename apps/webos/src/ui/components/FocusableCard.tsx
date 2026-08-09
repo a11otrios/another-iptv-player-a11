@@ -1,6 +1,7 @@
 import { memo, ReactNode, useCallback } from "react";
 import { useFocusable } from "@noriginmedia/norigin-spatial-navigation";
 import { PosterImage } from "./PosterImage";
+import { useShelfImagePreload } from "./Shelf";
 
 export type CardShape = "poster" | "landscape";
 
@@ -23,6 +24,7 @@ export const FocusableCard = memo(function FocusableCard({
   onSelect,
   onFocusedElement,
   onArrowPress,
+  preloadImage = false,
 }: {
   title: string;
   subtitle?: string;
@@ -37,8 +39,10 @@ export const FocusableCard = memo(function FocusableCard({
   onFocusedElement?: (el: HTMLElement) => void;
   /** Return false to consume the key and suppress default spatial nav. */
   onArrowPress?: (direction: string, el: HTMLElement | null) => boolean;
+  preloadImage?: boolean;
 }) {
   const ratingLabel = formatRating(rating);
+  const shelfImagePreload = useShelfImagePreload();
   const onFocus = useCallback(() => {
     if (ref.current && onFocusedElement) onFocusedElement(ref.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -70,7 +74,7 @@ export const FocusableCard = memo(function FocusableCard({
           src={imageURL}
           alt={title}
           className={`image-${shape}`}
-          eager={focused}
+          eager={focused || preloadImage || shelfImagePreload}
         />
         {ratingLabel && <span className="card-rating">★ {ratingLabel}</span>}
         {favorite && <span className="card-favorite">♥</span>}

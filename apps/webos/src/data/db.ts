@@ -288,6 +288,29 @@ async function completeBulkPut<Name extends StoreWithPlaylistIndex>(
   await tx.done;
 }
 
+async function putChunkWithQuotaRecovery<Name extends StoreWithPlaylistIndex>(
+  db: AppDB,
+  storeName: Name,
+  records: AppDBSchema[Name]["value"][],
+): Promise<void> {
+  const retryDelays = [0, 500, 1000, 2000, 4000, 8000, 12000];
+  let lastError: unknown;
+  for (const delay of retryDelays) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      await completeBulkPut(db, storeName, records);
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) throw error;
+      lastError = error;
+      // Posters are disposable. webOS may need a short delay after clearing
+      // them (or an old mirrored catalog) before its quota ledger catches up.
+      await db.clear("imageCache").catch(() => {});
+    }
+  }
+  throw lastError;
+}
+
 /** Bulk upsert in chunked transactions so huge catalogs don't starve the UI. */
 export async function bulkPut<Name extends StoreWithPlaylistIndex>(
   db: AppDB,
@@ -296,17 +319,13 @@ export async function bulkPut<Name extends StoreWithPlaylistIndex>(
   chunkSize = 500,
   onProgress?: (written: number, total: number) => void,
 ): Promise<void> {
-  for (let i = 0; i < records.length; i += chunkSize) {
-    const chunk = records.slice(i, i + chunkSize);
-    try {
-      await completeBulkPut(db, storeName, chunk);
-    } catch (error) {
-      if (!isQuotaExceededError(error)) throw error;
-      // Posters are disposable; catalog/state records are not. Clearing this
-      // store also repairs TVs left full by older unbounded cache versions.
-      await db.clear("imageCache");
-      await completeBulkPut(db, storeName, chunk);
-    }
-    onProgress?.(Math.min(i + chunkSize, records.length), records.length);
+  const effectiveChunkSize = Math.min(chunkSize, 50);
+  for (let i = 0; i < records.length; i += effectiveChunkSize) {
+    const chunk = records.slice(i, i + effectiveChunkSize);
+    await putChunkWithQuotaRecovery(db, storeName, chunk);
+    onProgress?.(
+      Math.min(i + effectiveChunkSize, records.length),
+      records.length,
+    );
   }
 }
