@@ -17,12 +17,17 @@ import 'user_preferences.dart';
 import '../services/service_locator.dart';
 import '../utils/radio_station_filter.dart';
 
+typedef IptvHttpGet =
+    Future<http.Response> Function(Uri uri, {Map<String, String>? headers});
+
 class IptvRepository {
   final ApiConfig _config;
   final String _playlistId;
-  final _database = getIt<AppDatabase>();
+  final IptvHttpGet _httpGet;
+  AppDatabase get _database => getIt<AppDatabase>();
 
-  IptvRepository(this._config, this._playlistId);
+  IptvRepository(this._config, this._playlistId, {IptvHttpGet? httpGet})
+    : _httpGet = httpGet ?? http.get;
 
   Future<http.Response> _makeRequest(
     String endpoint, {
@@ -49,9 +54,10 @@ class IptvRepository {
           ).replace(queryParameters: {'url': uri.toString()})
         : uri;
 
-    return await http
-        .get(requestUri, headers: {'Content-Type': 'application/json'})
-        .timeout(timeout);
+    return await _httpGet(
+      requestUri,
+      headers: {'Content-Type': 'application/json'},
+    ).timeout(timeout);
   }
 
   Future<ApiResponse?> getPlayerInfo({
@@ -207,32 +213,17 @@ class IptvRepository {
     int limit = 2,
   }) async {
     try {
-      final response = await _makeRequest(
-        'player_api.php',
-        additionalParams: {
-          'action': 'get_short_epg',
-          'stream_id': streamId,
-          'limit': limit.toString(),
-        },
-        cacheBuster: true,
-        timeout: const Duration(seconds: 20),
+      var listings = await _getEpgListings(
+        streamId,
+        action: 'get_short_epg',
+        limit: limit,
       );
 
-      if (response.statusCode != 200) {
-        throw Exception(
-          'HTTP ${response.statusCode}: ${response.reasonPhrase}',
+      if (listings.isEmpty) {
+        listings = await _getEpgListings(
+          streamId,
+          action: 'get_simple_data_table',
         );
-      }
-
-      final jsonData = json.decode(response.body);
-      final listings = jsonData is Map<String, dynamic>
-          ? jsonData['epg_listings']
-          : jsonData is Map
-          ? jsonData['epg_listings']
-          : null;
-
-      if (listings is! List) {
-        return const [];
       }
 
       final programs =
@@ -253,11 +244,45 @@ class IptvRepository {
               return left.compareTo(right);
             });
 
-      return programs.take(limit).toList();
+      final now = DateTime.now();
+      final relevant = programs.where((program) {
+        if (program.nowPlaying || program.isAiringAt(now)) return true;
+        final start = program.startTime;
+        if (start != null) return start.isAfter(now);
+        return program.endTime == null;
+      });
+
+      return relevant.take(limit).toList();
     } catch (e) {
       debugPrint('Short EPG Error: $e');
       return null;
     }
+  }
+
+  Future<List<dynamic>> _getEpgListings(
+    String streamId, {
+    required String action,
+    int? limit,
+  }) async {
+    final params = <String, String>{
+      'action': action,
+      'stream_id': streamId,
+      if (limit != null) 'limit': limit.toString(),
+    };
+    final response = await _makeRequest(
+      'player_api.php',
+      additionalParams: params,
+      cacheBuster: true,
+      timeout: const Duration(seconds: 20),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.reasonPhrase}');
+    }
+
+    final jsonData = json.decode(response.body);
+    final listings = jsonData is Map ? jsonData['epg_listings'] : null;
+    return listings is List ? listings : const [];
   }
 
   Future<List<VodStream>?> getMoviesFromApi({

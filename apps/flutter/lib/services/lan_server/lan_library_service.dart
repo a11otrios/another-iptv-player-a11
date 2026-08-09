@@ -683,6 +683,7 @@ class LanLibraryService {
       playlistId,
     );
     final programs = await repository.getShortEpg(streamId, limit: limit);
+    final now = DateTime.now();
     return (programs ?? const [])
         .map(
           (program) => <String, Object?>{
@@ -691,7 +692,7 @@ class LanLibraryService {
             'description': program.description,
             'startTime': program.startTime?.toUtc().toIso8601String(),
             'endTime': program.endTime?.toUtc().toIso8601String(),
-            'nowPlaying': program.nowPlaying,
+            'nowPlaying': program.nowPlaying || program.isAiringAt(now),
           },
         )
         .toList();
