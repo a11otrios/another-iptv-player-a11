@@ -82,6 +82,9 @@ export interface AppDBSchema extends DBSchema {
 
 export type AppDB = IDBPDatabase<AppDBSchema>;
 
+export const IMAGE_CACHE_MAX_ENTRIES = 180;
+export const IMAGE_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+
 let dbPromise: Promise<AppDB> | null = null;
 
 export function getDb(): Promise<AppDB> {
@@ -237,6 +240,54 @@ export async function clearCatalogStores(db: AppDB): Promise<void> {
   for (const store of stores) await db.clear(store);
 }
 
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { name?: string; code?: number; message?: string };
+  return (
+    value.name === "QuotaExceededError" ||
+    value.code === 22 ||
+    value.code === 1014 ||
+    /quota|storage.*exceed/i.test(value.message ?? "")
+  );
+}
+
+/** Keeps expendable poster blobs below a conservative webOS storage budget. */
+export async function pruneImageCache(
+  db: AppDB,
+  maxEntries = IMAGE_CACHE_MAX_ENTRIES,
+  maxBytes = IMAGE_CACHE_MAX_BYTES,
+): Promise<void> {
+  let entries = 0;
+  let bytes = 0;
+  let cursor = await db.transaction("imageCache").store.openCursor();
+  while (cursor) {
+    entries += 1;
+    bytes += Math.max(0, cursor.value.size || cursor.value.blob.size || 0);
+    cursor = await cursor.continue();
+  }
+  if (entries <= maxEntries && bytes <= maxBytes) return;
+
+  const tx = db.transaction("imageCache", "readwrite");
+  let oldest = await tx.store.index("byLastUsed").openCursor();
+  while (oldest && (entries > maxEntries || bytes > maxBytes)) {
+    bytes -= Math.max(0, oldest.value.size || oldest.value.blob.size || 0);
+    entries -= 1;
+    await oldest.delete();
+    oldest = await oldest.continue();
+  }
+  await tx.done;
+}
+
+async function completeBulkPut<Name extends StoreWithPlaylistIndex>(
+  db: AppDB,
+  storeName: Name,
+  records: AppDBSchema[Name]["value"][],
+): Promise<void> {
+  const tx = db.transaction(storeName, "readwrite");
+  for (const record of records) void tx.store.put(record as never);
+  await tx.done;
+}
+
 /** Bulk upsert in chunked transactions so huge catalogs don't starve the UI. */
 export async function bulkPut<Name extends StoreWithPlaylistIndex>(
   db: AppDB,
@@ -247,11 +298,15 @@ export async function bulkPut<Name extends StoreWithPlaylistIndex>(
 ): Promise<void> {
   for (let i = 0; i < records.length; i += chunkSize) {
     const chunk = records.slice(i, i + chunkSize);
-    const tx = db.transaction(storeName, "readwrite");
-    for (const record of chunk) {
-      void tx.store.put(record as never);
+    try {
+      await completeBulkPut(db, storeName, chunk);
+    } catch (error) {
+      if (!isQuotaExceededError(error)) throw error;
+      // Posters are disposable; catalog/state records are not. Clearing this
+      // store also repairs TVs left full by older unbounded cache versions.
+      await db.clear("imageCache");
+      await completeBulkPut(db, storeName, chunk);
     }
-    await tx.done;
     onProgress?.(Math.min(i + chunkSize, records.length), records.length);
   }
 }

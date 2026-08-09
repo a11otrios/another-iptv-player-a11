@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
-import { getDb } from "../data/db";
+import {
+  getDb,
+  IMAGE_CACHE_MAX_BYTES,
+  IMAGE_CACHE_MAX_ENTRIES,
+  isQuotaExceededError,
+  pruneImageCache,
+} from "../data/db";
 
 // Kingfisher-style two-tier image cache (iOS parity): an object-URL memory
 // tier over an IndexedDB blob tier. IPTV panels rarely send cache headers,
 // so without this every launch re-downloads every poster.
 
-const DISK_MAX_ENTRIES = 600;
 const MEMORY_MAX_ENTRIES = 500;
+const MAX_SINGLE_IMAGE_BYTES = 2 * 1024 * 1024;
 // Rewriting lastUsedAt on every disk hit meant one IDB write per poster while
 // scrolling — exactly when the main thread should stay idle. Recency only
 // matters at prune granularity, so refresh it at most this often per row.
@@ -43,17 +49,30 @@ function schedulePrune(): void {
 
 async function prune(): Promise<void> {
   const db = await getDb();
-  const count = await db.count("imageCache");
-  if (count <= DISK_MAX_ENTRIES) return;
-  let excess = count - DISK_MAX_ENTRIES;
-  const tx = db.transaction("imageCache", "readwrite");
-  let cursor = await tx.store.index("byLastUsed").openCursor();
-  while (cursor && excess > 0) {
-    await cursor.delete();
-    excess -= 1;
-    cursor = await cursor.continue();
+  await pruneImageCache(
+    db,
+    IMAGE_CACHE_MAX_ENTRIES,
+    IMAGE_CACHE_MAX_BYTES,
+  );
+}
+
+async function cacheBlob(url: string, blob: Blob): Promise<void> {
+  if (blob.size > MAX_SINGLE_IMAGE_BYTES) return;
+  const db = await getDb();
+  try {
+    await db.put("imageCache", {
+      url,
+      blob,
+      size: blob.size,
+      lastUsedAt: Date.now(),
+    });
+    schedulePrune();
+  } catch (error) {
+    if (!isQuotaExceededError(error)) return;
+    // Free old-version caches immediately. The current image remains usable
+    // from the in-memory object URL even when its disk write is discarded.
+    await db.clear("imageCache").catch(() => {});
   }
-  await tx.done;
 }
 
 async function resolve(url: string): Promise<string> {
@@ -75,10 +94,7 @@ async function resolve(url: string): Promise<string> {
   const blob = await response.blob();
   const objectUrl = URL.createObjectURL(blob);
   remember(url, objectUrl);
-  void db
-    .put("imageCache", { url, blob, size: blob.size, lastUsedAt: Date.now() })
-    .then(schedulePrune)
-    .catch(() => {});
+  void cacheBlob(url, blob);
   return objectUrl;
 }
 

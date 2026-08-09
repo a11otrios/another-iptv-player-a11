@@ -1,5 +1,11 @@
 import { ServerCategory, ServerClient, ServerItem } from "../api/serverClient";
-import { bulkPut, clearCatalogStores, deletePlaylistRows, getDb } from "./db";
+import {
+  bulkPut,
+  clearCatalogStores,
+  deletePlaylistRows,
+  getDb,
+  pruneImageCache,
+} from "./db";
 import { CatalogKind, CategoryRecord, PlaylistRecord } from "./records";
 import { invalidateCatalog } from "./catalogCache";
 import { settings } from "./settings";
@@ -34,6 +40,9 @@ export function syncServerLibrary(
 
 async function performServerSync(client: ServerClient): Promise<PlaylistRecord[]> {
   const db = await getDb();
+  // Older builds allowed hundreds of unbounded poster blobs. Reclaim that
+  // space before writing desktop state so quota failures self-heal on launch.
+  await pruneImageCache(db);
   const remote = await client.playlists();
   const playlists: PlaylistRecord[] = remote.map((item) => ({
     id: item.id,
