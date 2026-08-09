@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const APP_ID = 'com.devyorg.anotheriptvplayer';
-const IPK_NAME = `${APP_ID}_0.1.0_all.ipk`;
+const IPK_NAME = `${APP_ID}_1.7.0_all.ipk`;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliDir = path.join(root, 'node_modules', '@webos-tools', 'cli', 'bin');
 const device = readOption('--device') ?? 'tv';
