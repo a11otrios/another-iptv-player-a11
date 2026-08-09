@@ -24,6 +24,11 @@ node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 
+# Downloaded media tool artifacts (licenses and preparation scripts are kept)
+/tools/downloads/ffmpeg-*.7z
+/tools/downloads/ffmpeg-extract/
+/tools/ffmpeg/ffmpeg.exe
+
 # Per-app gitignore'lar kendi dizinlerinde:
 #   apps/flutter/.gitignore
 #   apps/apple/.gitignore   (ileride)

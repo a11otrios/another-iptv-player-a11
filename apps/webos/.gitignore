@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+*.wgt
+*.ipk
+tv-*.png
+.tizen-profile/
+public/spike-sources.json

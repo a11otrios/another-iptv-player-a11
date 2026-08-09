@@ -1,0 +1,15 @@
+{
+  "id": "com.devyorg.anotheriptvplayer",
+  "version": "0.1.0",
+  "vendor": "Another IPTV Player",
+  "type": "web",
+  "main": "index.html",
+  "title": "Another IPTV Player",
+  "appDescription": "A desktop-managed IPTV client for LG TVs.",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "iconColor": "#111418",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true,
+  "transparent": false
+}
