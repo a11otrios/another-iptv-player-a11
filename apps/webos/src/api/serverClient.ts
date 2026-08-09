@@ -1,6 +1,11 @@
 import { CatalogKind, FavoriteKind, HistoryKind } from "../data/records";
 import { discoverServers } from "./serverDiscovery";
 import { SubtitleStylePreference } from "../data/settings";
+import {
+  clearCatalogStores,
+  getDb,
+  isQuotaExceededError,
+} from "../data/db";
 
 const CONNECTION_KEY = "aiptv.webos.server.v1";
 let relocationInFlight: Promise<ServerConnection | null> | null = null;
@@ -185,6 +190,36 @@ export function clearServerConnection(): void {
   localStorage.removeItem(CONNECTION_KEY);
 }
 
+async function persistServerConnection(
+  connection: ServerConnection,
+): Promise<void> {
+  const value = JSON.stringify(connection);
+  try {
+    localStorage.setItem(CONNECTION_KEY, value);
+    return;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) throw error;
+  }
+
+  const db = await getDb();
+  await db.clear("imageCache");
+  try {
+    localStorage.setItem(CONNECTION_KEY, value);
+    return;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) throw error;
+  }
+
+  // Very old managed-client builds mirrored the full desktop catalog. It is
+  // safe to discard only when every local playlist is desktop-managed; the
+  // next sync recreates the small category index on demand.
+  const playlists = await db.getAll("playlists");
+  if (playlists.length > 0 && playlists.every((item) => item.managedByServer)) {
+    await clearCatalogStores(db);
+  }
+  localStorage.setItem(CONNECTION_KEY, value);
+}
+
 export class ServerClient {
   constructor(private connection: ServerConnection) {}
 
@@ -210,7 +245,7 @@ export class ServerClient {
       deviceId: body.deviceId,
       deviceName: body.deviceName,
     };
-    localStorage.setItem(CONNECTION_KEY, JSON.stringify(connection));
+    await persistServerConnection(connection);
     return new ServerClient(connection);
   }
 
@@ -397,7 +432,7 @@ async function relocateConnection(connection: ServerConnection): Promise<ServerC
         const body = await response.json() as Envelope<ServerPlaylist[]>;
         if (!Array.isArray(body.data)) continue;
         const relocated = { ...connection, baseUrl };
-        localStorage.setItem(CONNECTION_KEY, JSON.stringify(relocated));
+        await persistServerConnection(relocated);
         return relocated;
       } catch {
         // Try the next address advertised by discovery.

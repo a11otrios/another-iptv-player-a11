@@ -4,12 +4,22 @@ import {
   ServerClient,
   normalizeServerUrl,
 } from "../src/api/serverClient";
+import "fake-indexeddb/auto";
+import { IDBFactory } from "fake-indexeddb";
+import { resetDbForTests } from "../src/data/db";
 
 const values = new Map<string, string>();
+let quotaFailures = 0;
 Object.defineProperty(globalThis, "localStorage", {
   value: {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
+    setItem: (key: string, value: string) => {
+      if (quotaFailures > 0) {
+        quotaFailures -= 1;
+        throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+      }
+      values.set(key, value);
+    },
     removeItem: (key: string) => values.delete(key),
   },
 });
@@ -17,6 +27,9 @@ Object.defineProperty(globalThis, "localStorage", {
 describe("desktop server client", () => {
   beforeEach(() => {
     values.clear();
+    quotaFailures = 0;
+    globalThis.indexedDB = new IDBFactory();
+    resetDbForTests();
     vi.restoreAllMocks();
   });
 
@@ -39,6 +52,24 @@ describe("desktop server client", () => {
     await restored!.playlists();
 
     expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer secret");
+  });
+
+  it("reclaims image storage and retries pairing-token persistence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        token: "secret",
+        deviceId: "tv1",
+        deviceName: "LG TV",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    quotaFailures = 1;
+
+    await expect(
+      ServerClient.pair("192.168.1.20:32145", "123456"),
+    ).resolves.toBeInstanceOf(ServerClient);
+    expect(values.has("aiptv.webos.server.v1")).toBe(true);
   });
 
   it("keeps OpenSubtitles credentials desktop-side", async () => {
