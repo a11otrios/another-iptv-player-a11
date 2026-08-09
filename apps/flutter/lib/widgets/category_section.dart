@@ -21,6 +21,13 @@ class CategorySection extends StatelessWidget {
     this.onContentTap,
   });
 
+  static ValueKey<String> keyFor(CategoryViewModel category) {
+    final value = category.category;
+    return ValueKey(
+      'category-${value.playlistId}-${value.type.value}-${value.categoryId}',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -58,7 +65,7 @@ class CategorySection extends StatelessWidget {
             onContentTap: onContentTap,
             contentItems: category.contentItems,
             isSelectionModeEnabled: false,
-            key: key,
+            key: ValueKey('content-${category.category.categoryId}'),
           ),
         ],
       ),

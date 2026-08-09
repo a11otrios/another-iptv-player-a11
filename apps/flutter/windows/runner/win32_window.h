@@ -71,6 +71,12 @@ class Win32Window {
   // Called when Destroy is called.
   virtual void OnDestroy();
 
+  // Resizes the hosted child content to the current client area.
+  void ResizeChildContent();
+
+  // Moves keyboard focus back to the hosted child content.
+  void FocusChildContent();
+
  private:
   friend class WindowClassRegistrar;
 

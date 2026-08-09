@@ -10,10 +10,10 @@ class ContentItemCardWidget extends StatefulWidget {
   final double cardHeight;
   final Function(ContentItem)? onContentTap;
   final List<ContentItem> contentItems;
-  int initialSelectedIndex;
+  final int initialSelectedIndex;
   final bool isSelectionModeEnabled;
 
-  ContentItemCardWidget({
+  const ContentItemCardWidget({
     super.key,
     required this.cardHeight,
     required this.cardWidth,
@@ -76,7 +76,8 @@ class _ContentItemCardWidgetState extends State<ContentItemCardWidget> {
     double screenWidth = MediaQuery.of(context).size.width;
 
     double cardTotalWidth = widget.cardWidth + 8;
-    double targetPosition = (cardTotalWidth * index) + (widget.cardWidth / 2) - (screenWidth / 2);
+    double targetPosition =
+        (cardTotalWidth * index) + (widget.cardWidth / 2) - (screenWidth / 2);
 
     double maxScrollExtent = _scrollController.position.maxScrollExtent;
     double minScrollExtent = _scrollController.position.minScrollExtent;
@@ -95,7 +96,11 @@ class _ContentItemCardWidgetState extends State<ContentItemCardWidget> {
   }
 
   void selectAndScrollToIndex(int index) {
-    if (index < 0 || index >= widget.contentItems.length || !widget.isSelectionModeEnabled) return;
+    if (index < 0 ||
+        index >= widget.contentItems.length ||
+        !widget.isSelectionModeEnabled) {
+      return;
+    }
 
     setState(() {
       selectedIndex = index;
@@ -106,6 +111,35 @@ class _ContentItemCardWidgetState extends State<ContentItemCardWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final itemIndexes = <Key, int>{
+      for (var index = 0; index < widget.contentItems.length; index++)
+        _contentKey(widget.contentItems[index]): index,
+    };
+    final contentList = ListView.builder(
+      controller: _scrollController,
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      itemCount: widget.contentItems.length,
+      findChildIndexCallback: (key) => itemIndexes[key],
+      itemBuilder: (context, index) {
+        final content = widget.contentItems[index];
+        return Container(
+          key: _contentKey(content),
+          width: widget.cardWidth,
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          child: ContentCard(
+            content: content,
+            width: widget.cardWidth,
+            onTap: () {
+              selectAndScrollToIndex(index);
+              widget.onContentTap?.call(content);
+            },
+            isSelected: selectedIndex == index,
+          ),
+        );
+      },
+    );
+
     return SizedBox(
       height: widget.cardHeight,
       child: isDesktop
@@ -113,52 +147,13 @@ class _ContentItemCardWidgetState extends State<ContentItemCardWidget> {
               controller: _scrollController,
               thumbVisibility: false,
               trackVisibility: false,
-              child: ListView.builder(
-                controller: _scrollController,
-                scrollDirection: Axis.horizontal,
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                itemCount: widget.contentItems.length,
-                itemBuilder: (context, index) {
-                  return Container(
-                    width: widget.cardWidth,
-                    margin: EdgeInsets.symmetric(horizontal: 4),
-                    child: ContentCard(
-                      content: widget.contentItems[index],
-                      width: widget.cardWidth,
-                      onTap: () {
-                        selectAndScrollToIndex(index);
-                        widget.onContentTap?.call(widget.contentItems[index]);
-                      },
-                      isSelected: selectedIndex == index,
-                      key: widget.key,
-                    ),
-                  );
-                },
-              ),
+              child: contentList,
             )
-          : ListView.builder(
-              controller: _scrollController,
-              scrollDirection: Axis.horizontal,
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              itemCount: widget.contentItems.length,
-              itemBuilder: (context, index) {
-                return Container(
-                  width: widget.cardWidth,
-                  margin: EdgeInsets.symmetric(horizontal: 4),
-                  child: ContentCard(
-                    content: widget.contentItems[index],
-                    width: widget.cardWidth,
-                    onTap: () {
-                      selectAndScrollToIndex(index);
-                      widget.onContentTap?.call(widget.contentItems[index]);
-                    },
-                    isSelected: selectedIndex == index,
-                    key: widget.key,
-
-                  ),
-                );
-              },
-            ),
+          : contentList,
     );
+  }
+
+  ValueKey<String> _contentKey(ContentItem content) {
+    return ValueKey('content-${content.contentType.name}-${content.id}');
   }
 }

@@ -8,7 +8,11 @@ import '../screens/m3u/m3u_player_screen.dart';
 import '../screens/movies/movie_screen.dart';
 import '../screens/series/series_screen.dart';
 
-void navigateByContentType(BuildContext context, ContentItem content) {
+void navigateByContentType(
+  BuildContext context,
+  ContentItem content, {
+  List<ContentItem>? queue,
+}) {
   if (isM3u &&
       ((content.m3uItem != null && content.m3uItem!.groupTitle == null) ||
           content.contentType == ContentType.series)) {
@@ -35,7 +39,8 @@ void navigateByContentType(BuildContext context, ContentItem content) {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => LiveStreamScreen(content: content),
+          builder: (context) =>
+              LiveStreamScreen(content: content, queue: queue),
         ),
       );
     case ContentType.vod:

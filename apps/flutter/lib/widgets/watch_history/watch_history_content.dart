@@ -11,7 +11,7 @@ import 'watch_history_section.dart';
 import 'favorites_section.dart';
 
 class WatchHistoryContent extends StatelessWidget {
-  final Function(dynamic) onHistoryTap;
+  final void Function(WatchHistory, List<WatchHistory>) onHistoryTap;
   final Function(dynamic) onHistoryRemove;
   final Function(String, List<WatchHistory>) onSeeAllTap;
   final Function(Favorite)? onFavoriteRemove;
@@ -40,7 +40,8 @@ class WatchHistoryContent extends StatelessWidget {
                 onRefresh: controller.loadWatchHistory,
                 onClearAll: controller.clearAllHistory,
                 onRefreshFavorites: () {
-                  final favoritesController = context.read<FavoritesController>();
+                  final favoritesController = context
+                      .read<FavoritesController>();
                   favoritesController.loadFavorites();
                 },
               ),
@@ -65,7 +66,8 @@ class WatchHistoryContent extends StatelessWidget {
                   histories: controller.liveHistory,
                   cardWidth: cardWidth,
                   cardHeight: cardHeight,
-                  onHistoryTap: onHistoryTap,
+                  onHistoryTap: (history) =>
+                      onHistoryTap(history, controller.liveHistory),
                   onHistoryRemove: onHistoryRemove,
                   onSeeAllTap: () => onSeeAllTap(
                     context.loc.live_streams,
@@ -78,7 +80,8 @@ class WatchHistoryContent extends StatelessWidget {
                   cardWidth: cardWidth,
                   cardHeight: cardHeight,
                   showProgress: true,
-                  onHistoryTap: onHistoryTap,
+                  onHistoryTap: (history) =>
+                      onHistoryTap(history, controller.movieHistory),
                   onHistoryRemove: onHistoryRemove,
                   onSeeAllTap: () =>
                       onSeeAllTap(context.loc.movies, controller.movieHistory),
@@ -89,7 +92,8 @@ class WatchHistoryContent extends StatelessWidget {
                   cardWidth: cardWidth,
                   cardHeight: cardHeight,
                   showProgress: true,
-                  onHistoryTap: onHistoryTap,
+                  onHistoryTap: (history) =>
+                      onHistoryTap(history, controller.seriesHistory),
                   onHistoryRemove: onHistoryRemove,
                   onSeeAllTap: () => onSeeAllTap(
                     context.loc.series_plural,

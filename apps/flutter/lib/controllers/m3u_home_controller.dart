@@ -6,8 +6,10 @@ import 'package:another_iptv_player/models/m3u_item.dart';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
 import 'package:another_iptv_player/models/view_state.dart';
 import 'package:another_iptv_player/repositories/m3u_repository.dart';
+import 'package:another_iptv_player/repositories/user_preferences.dart';
 import 'package:another_iptv_player/services/app_state.dart';
 import 'package:flutter/material.dart';
+import 'package:another_iptv_player/utils/radio_station_filter.dart';
 
 class M3UHomeController extends ChangeNotifier {
   late PageController _pageController;
@@ -25,6 +27,8 @@ class M3UHomeController extends ChangeNotifier {
   List<M3uItem>? _liveChannels;
   List<M3uItem>? _movies;
   List<M3uItem>? _series;
+  final Set<String> _hiddenCategoryKeys = {};
+  bool _hideRadioStations = false;
 
   // Getters
   PageController get pageController => _pageController;
@@ -37,7 +41,16 @@ class M3UHomeController extends ChangeNotifier {
 
   List<CategoryViewModel>? get seriesCategories => _seriesCategories;
 
-  List<M3uItem>? get m3uItems => _m3uItems;
+  List<CategoryViewModel> get visibleLiveCategories =>
+      _visibleCategories(_liveCategories);
+
+  List<CategoryViewModel> get visibleVodCategories =>
+      _visibleCategories(_vodCategories);
+
+  List<CategoryViewModel> get visibleSeriesCategories =>
+      _visibleCategories(_seriesCategories);
+
+  List<M3uItem>? get m3uItems => _visibleM3uItems(_m3uItems);
 
   List<M3uItem>? get liveChannels => _liveChannels;
 
@@ -46,6 +59,10 @@ class M3UHomeController extends ChangeNotifier {
   List<M3uItem>? get series => _series;
 
   bool get isLoading => _isLoading;
+
+  String? get errorMessage => _errorMessage;
+
+  ViewState get viewState => _viewState;
 
   M3UHomeController() {
     _pageController = PageController();
@@ -82,14 +99,16 @@ class M3UHomeController extends ChangeNotifier {
       case 0:
         return context.loc.history;
       case 1:
-        return context.loc.all;
+        return context.loc.favorites;
       case 2:
-        return context.loc.live_streams;
+        return context.loc.all;
       case 3:
-        return context.loc.movies;
+        return context.loc.live_streams;
       case 4:
-        return context.loc.series_plural;
+        return context.loc.movies;
       case 5:
+        return context.loc.series_plural;
+      case 6:
         return context.loc.settings;
       default:
         return 'Another IPTV Player';
@@ -109,6 +128,7 @@ class M3UHomeController extends ChangeNotifier {
       _isLoading = true;
       notifyListeners();
 
+      await reloadHiddenCategories(notify: false);
       _m3uItems = await _repository.getM3uItems();
       AppState.m3uItems = _m3uItems;
 
@@ -126,6 +146,7 @@ class M3UHomeController extends ChangeNotifier {
       _isLoading = true;
       notifyListeners();
 
+      await reloadHiddenCategories(notify: false);
       var categories = await _repository.getCategories();
       for (var category in categories!) {
         if (category.type != CategoryType.series) {
@@ -195,5 +216,84 @@ class M3UHomeController extends ChangeNotifier {
       _setViewState(ViewState.error);
       _isLoading = false;
     }
+  }
+
+  Future<void> reloadHiddenCategories({bool notify = true}) async {
+    final hidden = await UserPreferences.getHiddenCategories(
+      playlistId: AppState.currentPlaylist?.id,
+    );
+    _hiddenCategoryKeys
+      ..clear()
+      ..addAll(hidden);
+    final playlistId = AppState.currentPlaylist?.id;
+    _hideRadioStations =
+        playlistId != null &&
+        await UserPreferences.getHideRadioStations(playlistId: playlistId);
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> reloadCategoryPreferences({bool notify = true}) async {
+    await reloadHiddenCategories(notify: false);
+    final playlistId = AppState.currentPlaylist?.id;
+    if (playlistId != null) {
+      await _applyOrder(_liveCategories, playlistId);
+      await _applyOrder(_vodCategories, playlistId);
+      await _applyOrder(_seriesCategories, playlistId);
+    }
+    if (notify) notifyListeners();
+  }
+
+  Future<void> _applyOrder(
+    List<CategoryViewModel> categories,
+    String playlistId,
+  ) async {
+    if (categories.isEmpty) return;
+    final order = await UserPreferences.getCategoryOrder(
+      playlistId: playlistId,
+      type: categories.first.category.type,
+    );
+    final ordered = UserPreferences.applyCategoryOrder(
+      categories,
+      order,
+      (category) => category.category.categoryId,
+    );
+    categories
+      ..clear()
+      ..addAll(ordered);
+  }
+
+  List<CategoryViewModel> _visibleCategories(
+    List<CategoryViewModel> categories,
+  ) {
+    return categories.where((category) {
+      final key = UserPreferences.hiddenCategoryKey(
+        category.category.type,
+        category.category.categoryId,
+      );
+      return !_hiddenCategoryKeys.contains(key) &&
+          !_hiddenCategoryKeys.contains(category.category.categoryId) &&
+          (!_hideRadioStations ||
+              category.category.type != CategoryType.live ||
+              !isLikelyRadioStation('', category.category.categoryName));
+    }).toList();
+  }
+
+  List<M3uItem>? _visibleM3uItems(List<M3uItem>? items) {
+    if (items == null) return null;
+    return items.where((item) {
+      final categoryId = item.categoryId;
+      if (categoryId == null || categoryId.isEmpty) {
+        return true;
+      }
+      final categoryType = ContentType.toCategoryType(item.contentType);
+      final key = UserPreferences.hiddenCategoryKey(categoryType, categoryId);
+      return !_hiddenCategoryKeys.contains(key) &&
+          !_hiddenCategoryKeys.contains(categoryId) &&
+          (!_hideRadioStations ||
+              item.contentType != ContentType.liveStream ||
+              !isLikelyRadioStation(item.name ?? '', item.groupTitle));
+    }).toList();
   }
 }

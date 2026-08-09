@@ -5,9 +5,10 @@ import 'package:another_iptv_player/models/watch_history.dart';
 import 'package:another_iptv_player/services/service_locator.dart';
 
 class WatchHistoryService {
-  final _database = getIt<AppDatabase>();
+  final AppDatabase _database;
 
-  WatchHistoryService();
+  WatchHistoryService([AppDatabase? database])
+    : _database = database ?? getIt<AppDatabase>();
 
   Future<void> saveWatchHistory(WatchHistory history) async {
     await _database
@@ -41,10 +42,15 @@ class WatchHistoryService {
   }
 
   Future<List<WatchHistory>> getWatchHistoryByContentType(
-    ContentType contentType, String playlistId
+    ContentType contentType,
+    String playlistId,
   ) async {
     final query = _database.select(_database.watchHistories)
-      ..where((tbl) => tbl.contentType.equals(contentType.index) & tbl.playlistId.equals(playlistId))
+      ..where(
+        (tbl) =>
+            tbl.contentType.equals(contentType.index) &
+            tbl.playlistId.equals(playlistId),
+      )
       ..orderBy([(tbl) => OrderingTerm.desc(tbl.lastWatched)]);
 
     final results = await query.get();

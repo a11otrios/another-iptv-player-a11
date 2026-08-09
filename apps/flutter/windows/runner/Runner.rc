@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "iptv_player" "\0"
+            VALUE "CompanyName", "Another IPTV Player" "\0"
+            VALUE "FileDescription", "Another IPTV Player" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "iptv_player" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Another IPTV Player. All rights reserved." "\0"
             VALUE "OriginalFilename", "iptv_player.exe" "\0"
-            VALUE "ProductName", "iptv_player" "\0"
+            VALUE "ProductName", "Another IPTV Player" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
@@ -122,5 +122,5 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APP_TITLE       "Another IPTV PLayer"
+    IDS_APP_TITLE       "Another IPTV Player"
 END

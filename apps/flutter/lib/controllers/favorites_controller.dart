@@ -6,7 +6,7 @@ import 'package:another_iptv_player/repositories/favorites_repository.dart';
 
 class FavoritesController extends ChangeNotifier {
   final FavoritesRepository _repository = FavoritesRepository();
-  
+
   List<Favorite> _favorites = [];
   bool _isLoading = false;
   String? _error;
@@ -14,14 +14,14 @@ class FavoritesController extends ChangeNotifier {
   List<Favorite> get favorites => _favorites;
   bool get isLoading => _isLoading;
   String? get error => _error;
-  
-  List<Favorite> get liveStreamFavorites => 
+
+  List<Favorite> get liveStreamFavorites =>
       _favorites.where((f) => f.contentType == ContentType.liveStream).toList();
-  
-  List<Favorite> get movieFavorites => 
+
+  List<Favorite> get movieFavorites =>
       _favorites.where((f) => f.contentType == ContentType.vod).toList();
-  
-  List<Favorite> get seriesFavorites => 
+
+  List<Favorite> get seriesFavorites =>
       _favorites.where((f) => f.contentType == ContentType.series).toList();
 
   int get totalFavoriteCount => _favorites.length;
@@ -32,12 +32,9 @@ class FavoritesController extends ChangeNotifier {
   Future<void> loadFavorites() async {
     print('FavoritesController: loadFavorites başladı');
     try {
-      _setLoading(true);
+      _setLoading(_favorites.isEmpty);
       _setError(null);
-      
-      _favorites.clear();
-      notifyListeners();
-      
+
       _favorites = await _repository.getAllFavorites();
       print('FavoritesController: ${_favorites.length} favori yüklendi');
       notifyListeners();
@@ -52,10 +49,10 @@ class FavoritesController extends ChangeNotifier {
   Future<bool> addFavorite(ContentItem contentItem) async {
     try {
       _setError(null);
-      
+
       await _repository.addFavorite(contentItem);
       await loadFavorites();
-      
+
       return true;
     } catch (e) {
       _setError('Favori eklenirken hata oluştu: $e');
@@ -63,13 +60,21 @@ class FavoritesController extends ChangeNotifier {
     }
   }
 
-  Future<bool> removeFavorite(String streamId, ContentType contentType, {String? episodeId}) async {
+  Future<bool> removeFavorite(
+    String streamId,
+    ContentType contentType, {
+    String? episodeId,
+  }) async {
     try {
       _setError(null);
-      
-      await _repository.removeFavorite(streamId, contentType, episodeId: episodeId);
+
+      await _repository.removeFavorite(
+        streamId,
+        contentType,
+        episodeId: episodeId,
+      );
       await loadFavorites();
-      
+
       return true;
     } catch (e) {
       _setError('Favori kaldırılırken hata oluştu: $e');
@@ -80,10 +85,10 @@ class FavoritesController extends ChangeNotifier {
   Future<bool> toggleFavorite(ContentItem contentItem) async {
     try {
       _setError(null);
-      
+
       final result = await _repository.toggleFavorite(contentItem);
       await loadFavorites();
-      
+
       return result;
     } catch (e) {
       _setError('Favori işlemi sırasında hata oluştu: $e');
@@ -91,16 +96,26 @@ class FavoritesController extends ChangeNotifier {
     }
   }
 
-  Future<bool> isFavorite(String streamId, ContentType contentType, {String? episodeId}) async {
+  Future<bool> isFavorite(
+    String streamId,
+    ContentType contentType, {
+    String? episodeId,
+  }) async {
     try {
-      return await _repository.isFavorite(streamId, contentType, episodeId: episodeId);
+      return await _repository.isFavorite(
+        streamId,
+        contentType,
+        episodeId: episodeId,
+      );
     } catch (e) {
       _setError('Favori kontrolü sırasında hata oluştu: $e');
       return false;
     }
   }
 
-  Future<List<Favorite>> getFavoritesByContentType(ContentType contentType) async {
+  Future<List<Favorite>> getFavoritesByContentType(
+    ContentType contentType,
+  ) async {
     try {
       return await _repository.getFavoritesByContentType(contentType);
     } catch (e) {
@@ -130,10 +145,10 @@ class FavoritesController extends ChangeNotifier {
   Future<bool> updateFavorite(Favorite favorite) async {
     try {
       _setError(null);
-      
+
       await _repository.updateFavorite(favorite);
       await loadFavorites();
-      
+
       return true;
     } catch (e) {
       _setError('Favori güncellenirken hata oluştu: $e');
@@ -144,11 +159,11 @@ class FavoritesController extends ChangeNotifier {
   Future<bool> clearAllFavorites() async {
     try {
       _setError(null);
-      
+
       await _repository.clearAllFavorites();
       _favorites.clear();
       notifyListeners();
-      
+
       return true;
     } catch (e) {
       _setError('Favoriler temizlenirken hata oluştu: $e');
@@ -158,13 +173,19 @@ class FavoritesController extends ChangeNotifier {
 
   List<Favorite> searchFavorites(String query) {
     if (query.isEmpty) return _favorites;
-    
-    return _favorites.where((favorite) =>
-        favorite.name.toLowerCase().contains(query.toLowerCase())).toList();
+
+    return _favorites
+        .where(
+          (favorite) =>
+              favorite.name.toLowerCase().contains(query.toLowerCase()),
+        )
+        .toList();
   }
 
   List<Favorite> filterFavoritesByContentType(ContentType contentType) {
-    return _favorites.where((favorite) => favorite.contentType == contentType).toList();
+    return _favorites
+        .where((favorite) => favorite.contentType == contentType)
+        .toList();
   }
 
   void clearError() {
@@ -180,4 +201,4 @@ class FavoritesController extends ChangeNotifier {
     _error = error;
     notifyListeners();
   }
-} 
+}

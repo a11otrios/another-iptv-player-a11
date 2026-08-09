@@ -648,6 +648,18 @@ class AppLocalizationsAr extends AppLocalizations {
   String get hide_category => 'إخفاء الفئة';
 
   @override
+  String get manage_categories => 'إدارة الفئات';
+
+  @override
+  String get hide_radio_stations => 'إخفاء محطات الراديو';
+
+  @override
+  String get move_to_top => 'نقل إلى الأعلى';
+
+  @override
+  String get restore_original_position => 'استعادة الموضع الأصلي';
+
+  @override
   String get rating => 'تصنيف';
 
   @override

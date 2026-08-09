@@ -1,5 +1,10 @@
 import 'dart:async';
+import 'package:another_iptv_player/models/api_configuration_model.dart';
+import 'package:another_iptv_player/models/epg_program.dart';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
+import 'package:another_iptv_player/models/playlist_model.dart';
+import 'package:another_iptv_player/repositories/iptv_repository.dart';
+import 'package:another_iptv_player/services/app_state.dart';
 import 'package:another_iptv_player/services/event_bus.dart';
 import 'package:another_iptv_player/services/player_state.dart';
 import 'package:another_iptv_player/l10n/localization_extension.dart';
@@ -23,6 +28,8 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
   static OverlayEntry? _globalOverlayEntry;
   static StreamSubscription? _globalToggleSubscription;
   static BuildContext? _globalContext;
+  Future<List<EpgProgram>?>? _epgFuture;
+  String? _epgContentKey;
 
   static void hideOverlay() {
     _globalOverlayEntry?.remove();
@@ -36,19 +43,17 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
 
     _globalContext = context;
 
-    if (_globalToggleSubscription == null) {
-      _globalToggleSubscription = EventBus()
-          .on<bool>('toggle_video_info')
-          .listen((bool show) {
-            if (show) {
-              if (_globalContext != null) {
-                _showVideoInfo(_globalContext!);
-              }
-            } else {
-              _hideVideoInfo();
+    _globalToggleSubscription ??= EventBus()
+        .on<bool>('toggle_video_info')
+        .listen((bool show) {
+          if (show) {
+            if (_globalContext != null) {
+              _showVideoInfo(_globalContext!);
             }
-          });
-    }
+          } else {
+            _hideVideoInfo();
+          }
+        });
   }
 
   @override
@@ -117,6 +122,8 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
   void _hideVideoInfo() {
     _globalOverlayEntry?.remove();
     _globalOverlayEntry = null;
+    _epgFuture = null;
+    _epgContentKey = null;
     PlayerState.showVideoInfo = false;
   }
 
@@ -131,20 +138,20 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
 
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.3),
+        color: Colors.black.withValues(alpha: 0.3),
         child: Align(
           alignment: Alignment.centerRight,
           child: Material(
-            color: Colors.black.withOpacity(0.95),
+            color: Colors.black.withValues(alpha: 0.95),
             elevation: 8,
             child: Container(
               width: panelWidth,
               height: double.infinity,
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.95),
+                color: Colors.black.withValues(alpha: 0.95),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.5),
+                    color: Colors.black.withValues(alpha: 0.5),
                     blurRadius: 10,
                     spreadRadius: 2,
                   ),
@@ -155,7 +162,7 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.8),
+                      color: Colors.black.withValues(alpha: 0.8),
                       border: Border(
                         bottom: BorderSide(color: Colors.grey[800]!, width: 1),
                       ),
@@ -208,7 +215,9 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
                             Icons.category,
                           ),
                           if (currentContent.containerExtension != null &&
-                              currentContent.containerExtension!.isNotEmpty) ...[
+                              currentContent
+                                  .containerExtension!
+                                  .isNotEmpty) ...[
                             const SizedBox(height: 12),
                             _buildInfoRow(
                               context,
@@ -261,14 +270,15 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
                                 Icons.movie,
                               ),
                             ],
-                            if (currentContent.vodStream!.createdAt != null) ...[
+                            if (currentContent.vodStream!.createdAt !=
+                                null) ...[
                               const SizedBox(height: 12),
                               _buildInfoRow(
                                 context,
                                 context.loc.creation_date,
-                                DateFormat('dd.MM.yyyy HH:mm').format(
-                                  currentContent.vodStream!.createdAt!,
-                                ),
+                                DateFormat(
+                                  'dd.MM.yyyy HH:mm',
+                                ).format(currentContent.vodStream!.createdAt!),
                                 Icons.calendar_today,
                               ),
                             ],
@@ -414,6 +424,9 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
                               currentContent.liveStream!.epgChannelId,
                               Icons.live_tv,
                             ),
+                          ],
+                          if (currentContent.liveStream != null) ...[
+                            _buildNowNextSection(context, currentContent),
                             const SizedBox(height: 12),
                             _buildInfoRow(
                               context,
@@ -425,7 +438,10 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
                           ],
                           if (currentContent.m3uItem != null &&
                               currentContent.m3uItem!.groupTitle != null &&
-                              currentContent.m3uItem!.groupTitle!.isNotEmpty) ...[
+                              currentContent
+                                  .m3uItem!
+                                  .groupTitle!
+                                  .isNotEmpty) ...[
                             const SizedBox(height: 12),
                             _buildInfoRow(
                               context,
@@ -455,7 +471,142 @@ class _VideoInfoWidgetState extends State<VideoInfoWidget> {
     );
   }
 
-  String _getContentTypeDisplayName(BuildContext context, ContentType contentType) {
+  Widget _buildNowNextSection(
+    BuildContext context,
+    ContentItem currentContent,
+  ) {
+    final future = _getEpgFuture(currentContent);
+    if (future == null) {
+      return const SizedBox.shrink();
+    }
+
+    return FutureBuilder<List<EpgProgram>?>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: _buildInfoRow(
+              context,
+              'EPG',
+              'Loading now/next...',
+              Icons.schedule,
+            ),
+          );
+        }
+
+        final programs = snapshot.data ?? const <EpgProgram>[];
+        if (programs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final now = _selectNowProgram(programs);
+        final next = _selectNextProgram(programs, now);
+        return Column(
+          children: [
+            if (now != null) ...[
+              const SizedBox(height: 12),
+              _buildEpgProgramRow(context, 'Now', now),
+            ],
+            if (next != null) ...[
+              const SizedBox(height: 12),
+              _buildEpgProgramRow(context, 'Next', next),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Future<List<EpgProgram>?>? _getEpgFuture(ContentItem content) {
+    final liveStream = content.liveStream;
+    final playlist = AppState.currentPlaylist;
+    if (liveStream == null ||
+        playlist == null ||
+        playlist.type != PlaylistType.xtream) {
+      return null;
+    }
+
+    final contentKey = '${playlist.id}\u0000${liveStream.streamId}';
+    if (_epgFuture == null || _epgContentKey != contentKey) {
+      _epgContentKey = contentKey;
+      _epgFuture = _getRepository(playlist)?.getShortEpg(liveStream.streamId);
+    }
+    return _epgFuture;
+  }
+
+  IptvRepository? _getRepository(Playlist playlist) {
+    final baseUrl = playlist.url;
+    final username = playlist.username;
+    final password = playlist.password;
+    if (baseUrl == null ||
+        baseUrl.isEmpty ||
+        username == null ||
+        username.isEmpty ||
+        password == null ||
+        password.isEmpty) {
+      return null;
+    }
+    return IptvRepository(
+      ApiConfig(baseUrl: baseUrl, username: username, password: password),
+      playlist.id,
+    );
+  }
+
+  EpgProgram? _selectNowProgram(List<EpgProgram> programs) {
+    final now = DateTime.now();
+    for (final program in programs) {
+      if (program.nowPlaying || program.isAiringAt(now)) {
+        return program;
+      }
+    }
+    return programs.isEmpty ? null : programs.first;
+  }
+
+  EpgProgram? _selectNextProgram(
+    List<EpgProgram> programs,
+    EpgProgram? nowProgram,
+  ) {
+    for (final program in programs) {
+      if (!identical(program, nowProgram)) {
+        return program;
+      }
+    }
+    return null;
+  }
+
+  Widget _buildEpgProgramRow(
+    BuildContext context,
+    String label,
+    EpgProgram program,
+  ) {
+    final value = [
+      _formatEpgTimeRange(program),
+      program.title,
+      if (program.description.isNotEmpty) program.description,
+    ].where((part) => part.isNotEmpty).join('\n');
+
+    return _buildInfoRow(
+      context,
+      label,
+      value,
+      label == 'Now' ? Icons.play_circle_outline : Icons.schedule,
+      isMultiline: true,
+    );
+  }
+
+  String _formatEpgTimeRange(EpgProgram program) {
+    final start = program.startTime;
+    final end = program.endTime;
+    if (start == null || end == null) return '';
+    final formatter = DateFormat('HH:mm');
+    return '${formatter.format(start)} - ${formatter.format(end)}';
+  }
+
+  String _getContentTypeDisplayName(
+    BuildContext context,
+    ContentType contentType,
+  ) {
     switch (contentType) {
       case ContentType.liveStream:
         return context.loc.live_stream_content_type;

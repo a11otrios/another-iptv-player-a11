@@ -651,6 +651,18 @@ class AppLocalizationsRu extends AppLocalizations {
   String get hide_category => 'Скрыть категории';
 
   @override
+  String get manage_categories => 'Управление категориями';
+
+  @override
+  String get hide_radio_stations => 'Скрыть радиостанции';
+
+  @override
+  String get move_to_top => 'Переместить наверх';
+
+  @override
+  String get restore_original_position => 'Вернуть исходную позицию';
+
+  @override
   String get rating => 'рейтинг';
 
   @override

@@ -8,6 +8,7 @@ import 'package:another_iptv_player/models/category_view_model.dart';
 import 'package:another_iptv_player/models/playlist_model.dart';
 import 'package:another_iptv_player/repositories/iptv_repository.dart';
 import 'package:another_iptv_player/screens/category_detail_screen.dart';
+import 'package:another_iptv_player/screens/favorites_screen.dart';
 import 'package:another_iptv_player/screens/xtream-codes/xtream_code_playlist_settings_screen.dart';
 import 'package:another_iptv_player/screens/watch_history_screen.dart';
 import 'package:another_iptv_player/services/app_state.dart';
@@ -38,7 +39,16 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
   static const double _defaultFontSize = 10.0;
   static const double _largeFontSize = 11.0;
   int? _hoveredIndex;
-  final ScrollController _scrollController = ScrollController();
+  final Map<ContentType, TextEditingController> _sectionSearchControllers = {
+    ContentType.liveStream: TextEditingController(),
+    ContentType.vod: TextEditingController(),
+    ContentType.series: TextEditingController(),
+  };
+  final Map<ContentType, ScrollController> _sectionScrollControllers = {
+    ContentType.liveStream: ScrollController(),
+    ContentType.vod: ScrollController(),
+    ContentType.series: ScrollController(),
+  };
 
   @override
   void initState() {
@@ -49,6 +59,12 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
   @override
   void dispose() {
     _controller.dispose();
+    for (final controller in _sectionSearchControllers.values) {
+      controller.dispose();
+    }
+    for (final controller in _sectionScrollControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -146,22 +162,29 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
         key: ValueKey('watch_history_${controller.currentIndex}'),
         playlistId: widget.playlist.id,
       ),
+      FavoritesScreen(isActive: controller.currentIndex == 1),
       _buildContentPage(
-        controller.liveCategories!,
+        controller.visibleLiveCategories,
         ContentType.liveStream,
         controller,
       ),
       _buildContentPage(
-        controller.movieCategories,
+        controller.visibleMovieCategories,
         ContentType.vod,
         controller,
       ),
       _buildContentPage(
-        controller.seriesCategories,
+        controller.visibleSeriesCategories,
         ContentType.series,
         controller,
       ),
-      XtreamCodePlaylistSettingsScreen(playlist: widget.playlist),
+      XtreamCodePlaylistSettingsScreen(
+        playlist: widget.playlist,
+        liveCategories: controller.liveCategories,
+        movieCategories: controller.movieCategories,
+        seriesCategories: controller.seriesCategories,
+        onCategoryVisibilityChanged: controller.reloadCategoryPreferences,
+      ),
     ];
   }
 
@@ -172,7 +195,49 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
   ) {
     return Scaffold(
       appBar: _buildAppBar(context, controller, contentType),
-      body: _buildCategoryList(categories, contentType),
+      body: Column(
+        children: [
+          _buildSectionSearchField(contentType),
+          Expanded(child: _buildCategoryList(categories, contentType)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionSearchField(ContentType contentType) {
+    final searchController = _sectionSearchControllers[contentType]!;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: TextField(
+            controller: searchController,
+            decoration: InputDecoration(
+              hintText: 'Search sections',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear section search',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        searchController.clear();
+                        setState(() {});
+                      },
+                    ),
+              border: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(6)),
+              ),
+              isDense: true,
+            ),
+            textInputAction: TextInputAction.search,
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+      ),
     );
   }
 
@@ -196,6 +261,7 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
       elevation: 0,
       actions: [
         IconButton(
+          tooltip: _getContentSearchTooltip(context, contentType),
           icon: const Icon(Icons.search),
           onPressed: () => _navigateToSearch(context, contentType),
         ),
@@ -227,6 +293,7 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
       elevation: 0,
       actions: [
         IconButton(
+          tooltip: _getContentSearchTooltip(context, contentType),
           icon: const Icon(Icons.search),
           onPressed: () => _navigateToSearch(context, contentType),
         ),
@@ -243,20 +310,74 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
     );
   }
 
+  String _getContentSearchTooltip(
+    BuildContext context,
+    ContentType contentType,
+  ) {
+    switch (contentType) {
+      case ContentType.liveStream:
+        return context.loc.search_live_stream;
+      case ContentType.vod:
+        return context.loc.search_movie;
+      case ContentType.series:
+        return context.loc.search_series;
+    }
+  }
+
   Widget _buildCategoryList(
     List<CategoryViewModel> categories,
     ContentType contentType,
   ) {
+    final rawSearchQuery = _sectionSearchControllers[contentType]!.text.trim();
+    final searchQuery = rawSearchQuery.toLowerCase();
+    final filteredCategories = searchQuery.isEmpty
+        ? categories
+        : categories.where((category) {
+            return category.category.categoryName.toLowerCase().contains(
+              searchQuery,
+            );
+          }).toList();
+    final scrollController = _sectionScrollControllers[contentType]!;
+    final categoryIndexes = <Key, int>{
+      for (var index = 0; index < filteredCategories.length; index++)
+        CategorySection.keyFor(filteredCategories[index]): index,
+    };
+
+    if (filteredCategories.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.search_off,
+                size: 48,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'No sections match "$rawSearchQuery"',
+                style: Theme.of(context).textTheme.titleMedium,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scrollbar(
-      controller: _scrollController,
+      controller: scrollController,
       interactive: true,
       child: ListView.builder(
-        controller: _scrollController,
+        controller: scrollController,
         shrinkWrap: true,
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: categories.length,
+        itemCount: filteredCategories.length,
+        findChildIndexCallback: (key) => categoryIndexes[key],
         itemBuilder: (context, index) =>
-            _buildCategorySection(categories[index], contentType),
+            _buildCategorySection(filteredCategories[index], contentType),
       ),
     );
   }
@@ -266,11 +387,13 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
     ContentType contentType,
   ) {
     return CategorySection(
+      key: CategorySection.keyFor(category),
       category: category,
       cardWidth: ResponsiveHelper.getCardWidth(context),
       cardHeight: ResponsiveHelper.getCardHeight(context),
       onSeeAllTap: () => _navigateToCategoryDetail(category),
-      onContentTap: (content) => navigateByContentType(context, content),
+      onContentTap: (content) =>
+          navigateByContentType(context, content, queue: category.contentItems),
     );
   }
 
@@ -363,7 +486,7 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
             color: isSelected
                 ? Theme.of(context).colorScheme.primaryContainer
                 : (_hoveredIndex == item.index
-                      ? Colors.grey.withOpacity(0.2)
+                      ? Colors.grey.withValues(alpha: 0.2)
                       : Colors.transparent),
           ),
           child: Column(
@@ -430,21 +553,26 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
   List<NavigationItem> _getNavigationItems(BuildContext context) {
     return [
       NavigationItem(icon: Icons.history, label: context.loc.history, index: 0),
-      NavigationItem(icon: Icons.live_tv, label: context.loc.live, index: 1),
+      NavigationItem(
+        icon: Icons.favorite,
+        label: context.loc.favorites,
+        index: 1,
+      ),
+      NavigationItem(icon: Icons.live_tv, label: context.loc.live, index: 2),
       NavigationItem(
         icon: Icons.movie_outlined,
         label: context.loc.movie,
-        index: 2,
+        index: 3,
       ),
       NavigationItem(
         icon: Icons.tv,
         label: context.loc.series_plural,
-        index: 3,
+        index: 4,
       ),
       NavigationItem(
         icon: Icons.settings,
         label: context.loc.settings,
-        index: 4,
+        index: 5,
       ),
     ];
   }

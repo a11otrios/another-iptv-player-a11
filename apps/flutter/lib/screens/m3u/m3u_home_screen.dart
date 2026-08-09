@@ -8,6 +8,7 @@ import 'package:another_iptv_player/models/playlist_model.dart';
 import 'package:another_iptv_player/models/category_view_model.dart';
 import 'package:another_iptv_player/repositories/m3u_repository.dart';
 import 'package:another_iptv_player/screens/category_detail_screen.dart';
+import 'package:another_iptv_player/screens/favorites_screen.dart';
 import 'package:another_iptv_player/widgets/category_section.dart';
 import 'package:another_iptv_player/utils/responsive_helper.dart';
 import 'package:another_iptv_player/utils/navigate_by_content_type.dart';
@@ -135,14 +136,22 @@ class _M3UHomeScreenState extends State<M3UHomeScreen> {
         key: ValueKey('watch_history_${controller.currentIndex}'),
         playlistId: widget.playlist.id,
       ),
+      FavoritesScreen(isActive: controller.currentIndex == 1),
       M3uItemsScreen(m3uItems: controller.m3uItems!),
       // _buildContentPage(controller.liveCategories!, controller),
       // _buildContentPage(controller.vodCategories!, controller),
       // _buildContentPage(controller.seriesCategories!, controller),
-      M3uPlaylistSettingsScreen(playlist: widget.playlist),
+      M3uPlaylistSettingsScreen(
+        playlist: widget.playlist,
+        liveCategories: controller.liveCategories ?? const [],
+        movieCategories: controller.vodCategories ?? const [],
+        seriesCategories: controller.seriesCategories ?? const [],
+        onCategoryVisibilityChanged: controller.reloadCategoryPreferences,
+      ),
     ];
   }
 
+  // ignore: unused_element
   Widget _buildContentPage(
     List<CategoryViewModel> categories,
     M3UHomeController controller,
@@ -195,20 +204,28 @@ class _M3UHomeScreenState extends State<M3UHomeScreen> {
   }
 
   Widget _buildCategoryList(List<CategoryViewModel> categories) {
+    final categoryIndexes = <Key, int>{
+      for (var index = 0; index < categories.length; index++)
+        CategorySection.keyFor(categories[index]): index,
+    };
+
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: categories.length,
+      findChildIndexCallback: (key) => categoryIndexes[key],
       itemBuilder: (context, index) => _buildCategorySection(categories[index]),
     );
   }
 
   Widget _buildCategorySection(CategoryViewModel category) {
     return CategorySection(
+      key: CategorySection.keyFor(category),
       category: category,
       cardWidth: ResponsiveHelper.getCardWidth(context),
       cardHeight: ResponsiveHelper.getCardHeight(context),
       onSeeAllTap: () => _navigateToCategoryDetail(category),
-      onContentTap: (content) => navigateByContentType(context, content),
+      onContentTap: (content) =>
+          navigateByContentType(context, content, queue: category.contentItems),
     );
   }
 
@@ -364,7 +381,12 @@ class _M3UHomeScreenState extends State<M3UHomeScreen> {
   List<NavigationItem> _getNavigationItems(BuildContext context) {
     return [
       NavigationItem(icon: Icons.history, label: context.loc.history, index: 0),
-      NavigationItem(icon: Icons.all_inbox, label: context.loc.all, index: 1),
+      NavigationItem(
+        icon: Icons.favorite,
+        label: context.loc.favorites,
+        index: 1,
+      ),
+      NavigationItem(icon: Icons.all_inbox, label: context.loc.all, index: 2),
       // NavigationItem(icon: Icons.live_tv, label: context.loc.live, index: 2),
       // NavigationItem(
       //   icon: Icons.movie_outlined,
@@ -379,7 +401,7 @@ class _M3UHomeScreenState extends State<M3UHomeScreen> {
       NavigationItem(
         icon: Icons.settings,
         label: context.loc.settings,
-        index: 2,
+        index: 3,
       ),
     ];
   }

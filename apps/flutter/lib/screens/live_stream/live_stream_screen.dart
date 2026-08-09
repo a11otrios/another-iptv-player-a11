@@ -11,8 +11,9 @@ import '../../../widgets/player_widget.dart';
 
 class LiveStreamScreen extends StatefulWidget {
   final ContentItem content;
+  final List<ContentItem>? queue;
 
-  const LiveStreamScreen({super.key, required this.content});
+  const LiveStreamScreen({super.key, required this.content, this.queue});
 
   @override
   State<LiveStreamScreen> createState() => _LiveStreamScreenState();
@@ -23,7 +24,7 @@ class _LiveStreamScreenState extends State<LiveStreamScreen> {
   List<ContentItem> allContents = [];
   bool allContentsLoaded = false;
   int selectedContentItemIndex = 0;
-  late StreamSubscription contentItemIndexChangedSubscription;
+  StreamSubscription? contentItemIndexChangedSubscription;
 
   @override
   void initState() {
@@ -34,34 +35,60 @@ class _LiveStreamScreenState extends State<LiveStreamScreen> {
   }
 
   Future<void> _initializeQueue() async {
-    allContents = isXtreamCode
-        ? (await AppState.xtreamCodeRepository!.getLiveChannelsByCategoryId(
-            categoryId: widget.content.liveStream!.categoryId,
-          ))!.map((x) {
-            return ContentItem(
-              x.streamId,
-              x.name,
-              x.streamIcon,
-              ContentType.liveStream,
-              liveStream: x,
+    final providedQueue = widget.queue
+        ?.where((item) => item.contentType == ContentType.liveStream)
+        .toList();
+
+    if (providedQueue != null &&
+        providedQueue.any((item) => item.id == widget.content.id)) {
+      allContents = providedQueue;
+    } else if (isXtreamCode) {
+      final categoryId = widget.content.liveStream?.categoryId;
+      final streams = categoryId == null
+          ? null
+          : await AppState.xtreamCodeRepository!.getLiveChannelsByCategoryId(
+              categoryId: categoryId,
             );
-          }).toList()
-        : (await AppState.m3uRepository!.getM3uItemsByCategoryId(
-            categoryId: widget.content.m3uItem!.categoryId!,
-          ))!.map((x) {
-            return ContentItem(
-              x.url,
-              x.name ?? 'NO NAME',
-              x.tvgLogo ?? '',
-              ContentType.liveStream,
-              m3uItem: x,
+      allContents = (streams ?? []).map((x) {
+        return ContentItem(
+          x.streamId,
+          x.name,
+          x.streamIcon,
+          ContentType.liveStream,
+          liveStream: x,
+        );
+      }).toList();
+    } else {
+      final categoryId = widget.content.m3uItem?.categoryId;
+      final streams = categoryId == null
+          ? null
+          : await AppState.m3uRepository!.getM3uItemsByCategoryId(
+              categoryId: categoryId,
             );
-          }).toList();
+      allContents = (streams ?? []).map((x) {
+        return ContentItem(
+          x.url,
+          x.name ?? 'NO NAME',
+          x.tvgLogo ?? '',
+          ContentType.liveStream,
+          m3uItem: x,
+        );
+      }).toList();
+    }
+
+    if (allContents.isEmpty) {
+      allContents = [widget.content];
+    }
+
+    if (!mounted) return;
 
     setState(() {
       selectedContentItemIndex = allContents.indexWhere(
         (element) => element.id == widget.content.id,
       );
+      if (selectedContentItemIndex < 0) {
+        selectedContentItemIndex = 0;
+      }
       allContentsLoaded = true;
     });
 
@@ -79,7 +106,7 @@ class _LiveStreamScreenState extends State<LiveStreamScreen> {
 
   @override
   void dispose() {
-    contentItemIndexChangedSubscription.cancel();
+    contentItemIndexChangedSubscription?.cancel();
     _showSystemUI();
     super.dispose();
   }
@@ -122,5 +149,4 @@ class _LiveStreamScreenState extends State<LiveStreamScreen> {
       ),
     );
   }
-
 }

@@ -11,9 +11,14 @@ import '../models/category_type.dart';
 
 class IptvController extends ChangeNotifier {
   final IptvRepository _repository;
+  ApiResponse? _initialPlayerInfo;
   bool refreshAll = false;
 
-  IptvController(this._repository, this.refreshAll);
+  IptvController(
+    this._repository,
+    this.refreshAll, {
+    ApiResponse? initialPlayerInfo,
+  }) : _initialPlayerInfo = initialPlayerInfo;
 
   // State
   ApiResponse? _userInfo;
@@ -63,7 +68,14 @@ class IptvController extends ChangeNotifier {
       _setCurrentStep(ProgressStep.userInfo);
       _setError(null);
 
-      _userInfo = await _repository.getPlayerInfo(forceRefresh: refreshAll);
+      final initialPlayerInfo = _initialPlayerInfo;
+      if (initialPlayerInfo != null) {
+        _initialPlayerInfo = null;
+        await _repository.cachePlayerInfo(initialPlayerInfo);
+        _userInfo = initialPlayerInfo;
+      } else {
+        _userInfo = await _repository.getPlayerInfo(forceRefresh: refreshAll);
+      }
 
       if (_userInfo == null) {
         throw Exception('preparing_user_info_exception_1');
@@ -74,7 +86,10 @@ class IptvController extends ChangeNotifier {
       if (e.toString().contains('preparing_user_info_exception_1')) {
         _setError(e.toString(), 'preparing_user_info_exception_1');
       } else {
-        _setError('preparing_user_info_exception_2', 'preparing_user_info_exception_2');
+        _setError(
+          'preparing_user_info_exception_2',
+          'preparing_user_info_exception_2',
+        );
       }
       return false;
     }
@@ -84,7 +99,9 @@ class IptvController extends ChangeNotifier {
     try {
       _setCurrentStep(ProgressStep.categories);
 
-      final categoriesMap = await _repository.getAllCategories(forceRefresh: refreshAll);
+      final categoriesMap = await _repository.getAllCategories(
+        forceRefresh: refreshAll,
+      );
 
       if (categoriesMap != null) {
         _liveCategories = categoriesMap[CategoryType.live] ?? [];
@@ -97,7 +114,10 @@ class IptvController extends ChangeNotifier {
 
       return false;
     } catch (e) {
-      _setError('preparing_categories_exception', 'preparing_categories_exception');
+      _setError(
+        'preparing_categories_exception',
+        'preparing_categories_exception',
+      );
       return false;
     }
   }
@@ -108,15 +128,21 @@ class IptvController extends ChangeNotifier {
 
       switch (type) {
         case CategoryType.live:
-          categories = await _repository.getLiveCategories(forceRefresh: refreshAll);
+          categories = await _repository.getLiveCategories(
+            forceRefresh: refreshAll,
+          );
           if (categories != null) _liveCategories = categories;
           break;
         case CategoryType.vod:
-          categories = await _repository.getVodCategories(forceRefresh: refreshAll);
+          categories = await _repository.getVodCategories(
+            forceRefresh: refreshAll,
+          );
           if (categories != null) _vodCategories = categories;
           break;
         case CategoryType.series:
-          categories = await _repository.getSeriesCategories(forceRefresh: refreshAll);
+          categories = await _repository.getSeriesCategories(
+            forceRefresh: refreshAll,
+          );
           if (categories != null) _seriesCategories = categories;
           break;
       }
@@ -124,7 +150,10 @@ class IptvController extends ChangeNotifier {
       notifyListeners();
       return categories != null;
     } catch (e) {
-      _setError('preparing_categories_exception', 'preparing_categories_exception');
+      _setError(
+        'preparing_categories_exception',
+        'preparing_categories_exception',
+      );
       return false;
     }
   }
@@ -145,7 +174,10 @@ class IptvController extends ChangeNotifier {
       if (e.toString().contains('preparing_live_streams_exception_1')) {
         _setError(e.toString(), 'preparing_live_streams_exception_1');
       } else {
-        _setError('preparing_live_streams_exception_2', 'preparing_live_streams_exception_2');
+        _setError(
+          'preparing_live_streams_exception_2',
+          'preparing_live_streams_exception_2',
+        );
       }
       return false;
     }
@@ -167,7 +199,10 @@ class IptvController extends ChangeNotifier {
       if (e.toString().contains('preparing_movies_exception_1')) {
         _setError(e.toString(), 'preparing_movies_exception_1');
       } else {
-        _setError('preparing_movies_exception_2', 'preparing_movies_exception_2');
+        _setError(
+          'preparing_movies_exception_2',
+          'preparing_movies_exception_2',
+        );
       }
       return false;
     }
@@ -189,7 +224,10 @@ class IptvController extends ChangeNotifier {
       if (e.toString().contains('preparing_series_exception_1')) {
         _setError(e.toString(), 'preparing_series_exception_1');
       } else {
-        _setError('preparing_series_exception_2', 'preparing_series_exception_2');
+        _setError(
+          'preparing_series_exception_2',
+          'preparing_series_exception_2',
+        );
       }
       return false;
     }

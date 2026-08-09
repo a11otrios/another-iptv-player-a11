@@ -649,6 +649,18 @@ class AppLocalizationsHi extends AppLocalizations {
   String get hide_category => 'श्रेणियाँ छिपाएँ';
 
   @override
+  String get manage_categories => 'श्रेणियां प्रबंधित करें';
+
+  @override
+  String get hide_radio_stations => 'रेडियो स्टेशन छिपाएं';
+
+  @override
+  String get move_to_top => 'सबसे ऊपर ले जाएं';
+
+  @override
+  String get restore_original_position => 'मूल स्थान बहाल करें';
+
+  @override
   String get rating => 'रेटिंग';
 
   @override

@@ -87,6 +87,21 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# The LAN server uses FFmpeg as a separate process for HLS remux/transcode
+# compatibility. prepare_ffmpeg.ps1 installs the pinned binary and notices in
+# the workspace tool directory; keep development and release layouts equal.
+get_filename_component(WORKSPACE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(FFMPEG_BUNDLE_DIR "${WORKSPACE_DIR}/tools/ffmpeg")
+if(EXISTS "${FFMPEG_BUNDLE_DIR}/ffmpeg.exe")
+  install(DIRECTORY "${FFMPEG_BUNDLE_DIR}/"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/tools/ffmpeg"
+    COMPONENT Runtime)
+else()
+  message(WARNING
+    "FFmpeg compatibility playback will be unavailable. Run "
+    "windows/prepare_ffmpeg.ps1 before building the Windows app.")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

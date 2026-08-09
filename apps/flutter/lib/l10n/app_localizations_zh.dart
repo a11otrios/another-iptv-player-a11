@@ -633,6 +633,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get hide_category => '隱藏類別';
 
   @override
+  String get manage_categories => '管理分類';
+
+  @override
+  String get hide_radio_stations => '隱藏廣播電台';
+
+  @override
+  String get move_to_top => '移至頂部';
+
+  @override
+  String get restore_original_position => '恢復原始位置';
+
+  @override
   String get rating => '等級';
 
   @override

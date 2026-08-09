@@ -19,4 +19,37 @@ class ApiResponse {
       serverInfo: ServerInfo.fromJson(json['server_info'] ?? {}, playlistId),
     );
   }
+
+  ApiResponse withPlaylistId(String newPlaylistId) {
+    return ApiResponse(
+      playlistId: newPlaylistId,
+      userInfo: UserInfo(
+        id: userInfo.id,
+        playlistId: newPlaylistId,
+        username: userInfo.username,
+        password: userInfo.password,
+        message: userInfo.message,
+        auth: userInfo.auth,
+        status: userInfo.status,
+        expDate: userInfo.expDate,
+        isTrial: userInfo.isTrial,
+        activeCons: userInfo.activeCons,
+        createdAt: userInfo.createdAt,
+        maxConnections: userInfo.maxConnections,
+        allowedOutputFormats: userInfo.allowedOutputFormats,
+      ),
+      serverInfo: ServerInfo(
+        id: serverInfo.id,
+        playlistId: newPlaylistId,
+        url: serverInfo.url,
+        port: serverInfo.port,
+        httpsPort: serverInfo.httpsPort,
+        serverProtocol: serverInfo.serverProtocol,
+        rtmpPort: serverInfo.rtmpPort,
+        timezone: serverInfo.timezone,
+        timestampNow: serverInfo.timestampNow,
+        timeNow: serverInfo.timeNow,
+      ),
+    );
+  }
 }

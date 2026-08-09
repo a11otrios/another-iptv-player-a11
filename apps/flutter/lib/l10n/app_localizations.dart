@@ -1302,6 +1302,30 @@ abstract class AppLocalizations {
   /// **'Hide categories'**
   String get hide_category;
 
+  /// No description provided for @manage_categories.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage categories'**
+  String get manage_categories;
+
+  /// No description provided for @hide_radio_stations.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide radio stations'**
+  String get hide_radio_stations;
+
+  /// No description provided for @move_to_top.
+  ///
+  /// In en, this message translates to:
+  /// **'Move to top'**
+  String get move_to_top;
+
+  /// No description provided for @restore_original_position.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore original position'**
+  String get restore_original_position;
+
   /// No description provided for @rating.
   ///
   /// In en, this message translates to:

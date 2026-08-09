@@ -1,0 +1,14 @@
+FFmpeg is bundled as a separate command-line program for optional media
+compatibility processing.
+
+Bundled build:
+  FFmpeg 8.1.2 essentials build for Windows by Gyan Doshi
+  https://www.gyan.dev/ffmpeg/builds/
+
+Upstream project and corresponding source:
+  https://ffmpeg.org/
+  https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
+
+The bundled build is distributed under GNU GPL version 3. Its archive LICENSE
+and README files are included beside the executable. Another IPTV Player
+invokes FFmpeg as a separate process and does not link against FFmpeg libraries.

@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
+import 'package:another_iptv_player/repositories/user_preferences.dart';
+import 'package:another_iptv_player/services/app_state.dart';
 import 'package:another_iptv_player/services/event_bus.dart';
 import 'package:another_iptv_player/services/player_state.dart';
 import 'package:another_iptv_player/services/playlist_content_state.dart';
 import 'package:another_iptv_player/l10n/localization_extension.dart';
 import 'package:flutter/material.dart';
+import '../../models/category.dart';
 import '../../models/content_type.dart';
 import '../../utils/get_playlist_type.dart';
 
@@ -35,6 +38,7 @@ class _VideoChannelSelectorWidgetState
   static bool _showSeasons = false;
   static ScrollController? _categoriesScrollController;
   static ScrollController? _channelsScrollController;
+  static Set<String> _hiddenCategoryKeys = {};
   static void hideOverlay() {
     _globalOverlayEntry?.remove();
     _globalOverlayEntry = null;
@@ -48,6 +52,7 @@ class _VideoChannelSelectorWidgetState
     _showCategories = false;
     _selectedSeason = null;
     _showSeasons = false;
+    _hiddenCategoryKeys = {};
     PlayerState.showChannelList = false;
   }
 
@@ -57,19 +62,17 @@ class _VideoChannelSelectorWidgetState
 
     _globalContext = context;
 
-    if (_globalToggleSubscription == null) {
-      _globalToggleSubscription = EventBus()
-          .on<bool>('toggle_channel_list')
-          .listen((bool show) {
-            if (show) {
-              if (_globalContext != null) {
-                _showChannelSelector(_globalContext!);
-              }
-            } else {
-              _hideChannelSelector();
+    _globalToggleSubscription ??= EventBus()
+        .on<bool>('toggle_channel_list')
+        .listen((bool show) {
+          if (show) {
+            if (_globalContext != null) {
+              _showChannelSelector(_globalContext!);
             }
-          });
-    }
+          } else {
+            _hideChannelSelector();
+          }
+        });
   }
 
   @override
@@ -120,21 +123,26 @@ class _VideoChannelSelectorWidgetState
     _channelsScrollController = ScrollController();
 
     final currentContent = PlayerState.currentContent;
-    
+
     if (currentContent?.contentType == ContentType.liveStream) {
       if (PlaylistContentState.liveCategories.isEmpty) {
         await PlaylistContentState.loadLiveStreams();
       }
-      
+      await _loadHiddenCategories();
+      if (!mounted) return;
+      if (!context.mounted) return;
+
       String? currentCategoryId;
       if (currentContent?.liveStream != null) {
         currentCategoryId = currentContent!.liveStream!.categoryId;
       } else if (currentContent?.m3uItem != null) {
         currentCategoryId = currentContent!.m3uItem!.categoryId;
       }
-      
-      if (currentCategoryId != null && 
-          PlaylistContentState.liveCategories.any((c) => c.categoryId == currentCategoryId)) {
+
+      if (currentCategoryId != null &&
+          _visibleLiveCategories().any(
+            (c) => c.categoryId == currentCategoryId,
+          )) {
         _selectedCategoryId = currentCategoryId;
         _showCategories = false;
       } else {
@@ -146,9 +154,9 @@ class _VideoChannelSelectorWidgetState
     } else if (currentContent?.contentType == ContentType.series) {
       final items = widget.queue ?? [];
       if (items.isEmpty) return;
-      
+
       final currentSeason = currentContent?.season;
-      
+
       if (currentSeason != null) {
         _selectedSeason = currentSeason;
         _showSeasons = false;
@@ -211,16 +219,20 @@ class _VideoChannelSelectorWidgetState
     PlayerState.showChannelList = false;
   }
 
-  Widget _buildOverlay(
-    BuildContext context,
-    double panelWidth,
-  ) {
+  Future<void> _loadHiddenCategories() async {
+    final hidden = await UserPreferences.getHiddenCategories(
+      playlistId: AppState.currentPlaylist?.id,
+    );
+    _hiddenCategoryKeys = hidden.toSet();
+  }
+
+  Widget _buildOverlay(BuildContext context, double panelWidth) {
     if (_globalOverlayEntry == null) {
       return const SizedBox.shrink();
     }
 
-    final backgroundColor = Colors.black.withOpacity(0.95);
-    final cardColor = Colors.black.withOpacity(0.8);
+    final backgroundColor = Colors.black.withValues(alpha: 0.95);
+    final cardColor = Colors.black.withValues(alpha: 0.8);
     const textColor = Colors.white;
     const secondaryTextColor = Colors.grey;
     final dividerColor = Colors.grey[800]!;
@@ -232,10 +244,12 @@ class _VideoChannelSelectorWidgetState
 
     List<ContentItem> items = [];
     int? selectedIndex;
-    
+
     if (_showCategories && isLiveStream) {
     } else if (_selectedCategoryId != null && isLiveStream) {
-      items = PlaylistContentState.getLiveStreamsByCategory(_selectedCategoryId!);
+      items = PlaylistContentState.getLiveStreamsByCategory(
+        _selectedCategoryId!,
+      );
       if (currentContent != null) {
         final foundIndex = items.indexWhere(
           (item) => item.id == currentContent.id,
@@ -259,7 +273,9 @@ class _VideoChannelSelectorWidgetState
     } else {
       if (isSeries && _selectedSeason != null) {
         final allItems = widget.queue ?? [];
-        items = allItems.where((item) => item.season == _selectedSeason).toList();
+        items = allItems
+            .where((item) => item.season == _selectedSeason)
+            .toList();
       } else {
         items = widget.queue ?? [];
       }
@@ -271,9 +287,7 @@ class _VideoChannelSelectorWidgetState
           selectedIndex = foundIndex;
         }
       }
-      if (selectedIndex == null) {
-        selectedIndex = widget.currentIndex ?? 0;
-      }
+      selectedIndex ??= widget.currentIndex ?? 0;
     }
 
     return Positioned.fill(
@@ -289,7 +303,7 @@ class _VideoChannelSelectorWidgetState
               color: backgroundColor,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.black.withValues(alpha: 0.2),
                   blurRadius: 10,
                   spreadRadius: 2,
                 ),
@@ -307,10 +321,14 @@ class _VideoChannelSelectorWidgetState
                   ),
                   child: Row(
                     children: [
-                      if ((_selectedCategoryId != null && isLiveStream) || 
+                      if ((_selectedCategoryId != null && isLiveStream) ||
                           (_selectedSeason != null && isSeries))
                         IconButton(
-                          icon: Icon(Icons.arrow_back, color: textColor, size: 20),
+                          icon: Icon(
+                            Icons.arrow_back,
+                            color: textColor,
+                            size: 20,
+                          ),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                           onPressed: () {
@@ -336,18 +354,19 @@ class _VideoChannelSelectorWidgetState
                           _showCategories && isLiveStream
                               ? context.loc.categories
                               : _selectedCategoryId != null && isLiveStream
-                                  ? PlaylistContentState.liveCategories
-                                      .firstWhere((c) => c.categoryId == _selectedCategoryId)
-                                      .categoryName
-                                      : _showSeasons && isSeries
-                                          ? context.loc.seasons
-                                          : _selectedSeason != null && isSeries
-                                              ? context.loc.season_number_format(_selectedSeason!)
-                                              : isVod
-                                                  ? context.loc.movies
-                                                  : isSeries
-                                                      ? context.loc.episodes
-                                                      : context.loc.select_channel,
+                              ? _selectedCategoryName() ??
+                                    context.loc.categories
+                              : _showSeasons && isSeries
+                              ? context.loc.seasons
+                              : _selectedSeason != null && isSeries
+                              ? context.loc.season_number_format(
+                                  _selectedSeason!,
+                                )
+                              : isVod
+                              ? context.loc.movies
+                              : isSeries
+                              ? context.loc.episodes
+                              : context.loc.select_channel,
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -355,8 +374,8 @@ class _VideoChannelSelectorWidgetState
                           ),
                         ),
                       ),
-                      if ((!_showCategories || _selectedCategoryId != null) && 
-                          (!_showSeasons || _selectedSeason != null) && 
+                      if ((!_showCategories || _selectedCategoryId != null) &&
+                          (!_showSeasons || _selectedSeason != null) &&
                           selectedIndex != null)
                         Text(
                           '${selectedIndex + 1} / ${items.length}',
@@ -379,23 +398,24 @@ class _VideoChannelSelectorWidgetState
                   child: _showCategories && isLiveStream
                       ? _buildCategoriesList(context)
                       : _showSeasons && isSeries
-                          ? _buildSeasonsList(context)
-                          : ListView.builder(
-                              controller: _channelsScrollController,
-                              padding: const EdgeInsets.all(12),
-                              itemCount: items.length,
-                              itemBuilder: (context, index) {
-                                final item = items[index];
-                                final isSelected = selectedIndex != null && index == selectedIndex;
+                      ? _buildSeasonsList(context)
+                      : ListView.builder(
+                          controller: _channelsScrollController,
+                          padding: const EdgeInsets.all(12),
+                          itemCount: items.length,
+                          itemBuilder: (context, index) {
+                            final item = items[index];
+                            final isSelected =
+                                selectedIndex != null && index == selectedIndex;
 
-                                return _buildChannelListItem(
-                                  context,
-                                  item,
-                                  index,
-                                  isSelected,
-                                );
-                              },
-                            ),
+                            return _buildChannelListItem(
+                              context,
+                              item,
+                              index,
+                              isSelected,
+                            );
+                          },
+                        ),
                 ),
               ],
             ),
@@ -409,20 +429,21 @@ class _VideoChannelSelectorWidgetState
     const textColor = Colors.white;
     const secondaryTextColor = Colors.grey;
     final dividerColor = Colors.grey[800]!;
-    final cardBackground = Colors.white.withOpacity(0.05);
+    final cardBackground = Colors.white.withValues(alpha: 0.05);
     const primaryColor = Colors.blue;
-    final primaryContainer = Colors.blue.withOpacity(0.2);
+    final primaryContainer = Colors.blue.withValues(alpha: 0.2);
 
     final allItems = widget.queue ?? [];
     final currentContent = PlayerState.currentContent;
-    
-    final seasons = allItems
-        .where((item) => item.season != null)
-        .map((item) => item.season!)
-        .toSet()
-        .toList()
-      ..sort();
-    
+
+    final seasons =
+        allItems
+            .where((item) => item.season != null)
+            .map((item) => item.season!)
+            .toSet()
+            .toList()
+          ..sort();
+
     final currentSeason = currentContent?.season;
 
     return ListView.builder(
@@ -430,7 +451,9 @@ class _VideoChannelSelectorWidgetState
       itemCount: seasons.length,
       itemBuilder: (context, index) {
         final season = seasons[index];
-        final episodeCount = allItems.where((item) => item.season == season).length;
+        final episodeCount = allItems
+            .where((item) => item.season == season)
+            .length;
         final isSelected = currentSeason != null && season == currentSeason;
 
         return Material(
@@ -446,7 +469,7 @@ class _VideoChannelSelectorWidgetState
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: isSelected
-                    ? primaryContainer.withOpacity(0.3)
+                    ? primaryContainer.withValues(alpha: 0.3)
                     : cardBackground,
                 borderRadius: BorderRadius.circular(8),
                 border: isSelected
@@ -469,7 +492,9 @@ class _VideoChannelSelectorWidgetState
                           context.loc.season_number_format(season),
                           style: TextStyle(
                             fontSize: 14,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.w600,
                             color: textColor,
                           ),
                         ),
@@ -485,11 +510,7 @@ class _VideoChannelSelectorWidgetState
                     ),
                   ),
                   if (isSelected)
-                    Icon(
-                      Icons.check_circle,
-                      color: primaryColor,
-                      size: 20,
-                    )
+                    Icon(Icons.check_circle, color: primaryColor, size: 20)
                   else
                     const Icon(
                       Icons.arrow_forward_ios,
@@ -509,13 +530,13 @@ class _VideoChannelSelectorWidgetState
     const textColor = Colors.white;
     const secondaryTextColor = Colors.grey;
     final dividerColor = Colors.grey[800]!;
-    final cardBackground = Colors.white.withOpacity(0.05);
+    final cardBackground = Colors.white.withValues(alpha: 0.05);
     const primaryColor = Colors.blue;
-    final primaryContainer = Colors.blue.withOpacity(0.2);
+    final primaryContainer = Colors.blue.withValues(alpha: 0.2);
 
-    final categories = PlaylistContentState.liveCategories;
+    final categories = _visibleLiveCategories();
     final currentContent = PlayerState.currentContent;
-    
+
     String? currentCategoryId;
     if (currentContent?.liveStream != null) {
       currentCategoryId = currentContent!.liveStream!.categoryId;
@@ -529,8 +550,12 @@ class _VideoChannelSelectorWidgetState
       itemCount: categories.length,
       itemBuilder: (context, index) {
         final category = categories[index];
-        final channelCount = PlaylistContentState.getLiveStreamsByCategory(category.categoryId).length;
-        final isSelected = currentCategoryId != null && category.categoryId == currentCategoryId;
+        final channelCount = PlaylistContentState.getLiveStreamsByCategory(
+          category.categoryId,
+        ).length;
+        final isSelected =
+            currentCategoryId != null &&
+            category.categoryId == currentCategoryId;
 
         return Material(
           color: Colors.transparent,
@@ -552,7 +577,7 @@ class _VideoChannelSelectorWidgetState
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: isSelected
-                    ? primaryContainer.withOpacity(0.3)
+                    ? primaryContainer.withValues(alpha: 0.3)
                     : cardBackground,
                 borderRadius: BorderRadius.circular(8),
                 border: isSelected
@@ -575,7 +600,9 @@ class _VideoChannelSelectorWidgetState
                           category.categoryName,
                           style: TextStyle(
                             fontSize: 14,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.w600,
                             color: textColor,
                           ),
                         ),
@@ -591,11 +618,7 @@ class _VideoChannelSelectorWidgetState
                     ),
                   ),
                   if (isSelected)
-                    Icon(
-                      Icons.check_circle,
-                      color: primaryColor,
-                      size: 20,
-                    )
+                    Icon(Icons.check_circle, color: primaryColor, size: 20)
                   else
                     const Icon(
                       Icons.arrow_forward_ios,
@@ -611,6 +634,29 @@ class _VideoChannelSelectorWidgetState
     );
   }
 
+  List<Category> _visibleLiveCategories() {
+    return PlaylistContentState.liveCategories.where((category) {
+      final key = UserPreferences.hiddenCategoryKey(
+        category.type,
+        category.categoryId,
+      );
+      return !_hiddenCategoryKeys.contains(key) &&
+          !_hiddenCategoryKeys.contains(category.categoryId);
+    }).toList();
+  }
+
+  String? _selectedCategoryName() {
+    final selectedCategoryId = _selectedCategoryId;
+    if (selectedCategoryId == null) return null;
+
+    for (final category in _visibleLiveCategories()) {
+      if (category.categoryId == selectedCategoryId) {
+        return category.categoryName;
+      }
+    }
+    return null;
+  }
+
   Widget _buildChannelListItem(
     BuildContext context,
     ContentItem item,
@@ -621,8 +667,8 @@ class _VideoChannelSelectorWidgetState
     const secondaryTextColor = Colors.grey;
     final dividerColor = Colors.grey[800]!;
     const primaryColor = Colors.blue;
-    final primaryContainer = Colors.blue.withOpacity(0.2);
-    final cardBackground = Colors.white.withOpacity(0.05);
+    final primaryContainer = Colors.blue.withValues(alpha: 0.2);
+    final cardBackground = Colors.white.withValues(alpha: 0.05);
     final errorBackground = Colors.grey[800]!;
     const errorIconColor = Colors.grey;
 
@@ -630,35 +676,43 @@ class _VideoChannelSelectorWidgetState
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          final isSeries = PlayerState.currentContent?.contentType == ContentType.series;
-          
+          final isSeries =
+              PlayerState.currentContent?.contentType == ContentType.series;
+
           if (isSeries && item.season != null) {
             if (_selectedSeason != item.season) {
               _selectedSeason = item.season;
               _showSeasons = false;
             }
           }
-          
-          if (_selectedCategoryId != null && 
-              PlayerState.currentContent?.contentType == ContentType.liveStream) {
-            final categoryItems = PlaylistContentState.getLiveStreamsByCategory(_selectedCategoryId!);
+
+          if (_selectedCategoryId != null &&
+              PlayerState.currentContent?.contentType ==
+                  ContentType.liveStream) {
+            final categoryItems = PlaylistContentState.getLiveStreamsByCategory(
+              _selectedCategoryId!,
+            );
             PlayerState.queue = categoryItems;
             PlayerState.currentIndex = index;
             PlayerState.currentContent = item;
-            
+
             EventBus().emit('player_content_item_index_changed', index);
             EventBus().emit('player_content_item', item);
           } else {
             final allItems = widget.queue ?? [];
-            final realIndex = allItems.indexWhere((queueItem) => queueItem.id == item.id);
+            final realIndex = allItems.indexWhere(
+              (queueItem) => queueItem.id == item.id,
+            );
             if (realIndex != -1) {
               EventBus().emit('player_content_item_index_changed', realIndex);
             } else {
               EventBus().emit('player_content_item_index_changed', index);
             }
           }
-          
-          if (isSeries && item.season != null && _selectedSeason == item.season) {
+
+          if (isSeries &&
+              item.season != null &&
+              _selectedSeason == item.season) {
             _globalOverlayEntry?.markNeedsBuild();
           }
         },
@@ -667,7 +721,7 @@ class _VideoChannelSelectorWidgetState
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: isSelected
-                ? primaryContainer.withOpacity(0.3)
+                ? primaryContainer.withValues(alpha: 0.3)
                 : cardBackground,
             borderRadius: BorderRadius.circular(8),
             border: isSelected
@@ -740,7 +794,10 @@ class _VideoChannelSelectorWidgetState
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
-                            _getContentTypeDisplayName(context, item.contentType),
+                            _getContentTypeDisplayName(
+                              context,
+                              item.contentType,
+                            ),
                             style: TextStyle(
                               fontSize: 11,
                               color: secondaryTextColor,
@@ -773,7 +830,10 @@ class _VideoChannelSelectorWidgetState
     }
   }
 
-  String _getContentTypeDisplayName(BuildContext context, ContentType contentType) {
+  String _getContentTypeDisplayName(
+    BuildContext context,
+    ContentType contentType,
+  ) {
     switch (contentType) {
       case ContentType.liveStream:
         return context.loc.live_stream_content_type;

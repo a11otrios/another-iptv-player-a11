@@ -51,16 +51,8 @@ class WatchHistoryController extends ChangeNotifier {
 
   Future<void> loadWatchHistory() async {
     print('WatchHistoryController: loadWatchHistory başladı');
-    _setLoading(true);
+    _setLoading(isAllEmpty);
     _clearError();
-
-    // Mevcut verileri temizle
-    _continueWatching.clear();
-    _recentlyWatched.clear();
-    _liveHistory.clear();
-    _movieHistory.clear();
-    _seriesHistory.clear();
-    notifyListeners();
 
     if (AppState.currentPlaylist == null) {
       print('WatchHistoryController: Aktif playlist bulunamadı');
@@ -103,11 +95,19 @@ class WatchHistoryController extends ChangeNotifier {
     }
   }
 
-  Future<void> playContent(BuildContext context, WatchHistory history) async {
+  Future<void> playContent(
+    BuildContext context,
+    WatchHistory history, {
+    List<WatchHistory>? sectionHistories,
+  }) async {
     try {
       switch (history.contentType) {
         case ContentType.liveStream:
-          await _playLiveStream(context, history);
+          await _playLiveStream(
+            context,
+            history,
+            sectionHistories: sectionHistories,
+          );
           break;
         case ContentType.vod:
           await _playMovie(context, history);
@@ -160,13 +160,17 @@ class WatchHistoryController extends ChangeNotifier {
 
   Future<void> _playLiveStream(
     BuildContext context,
-    WatchHistory history,
-  ) async {
+    WatchHistory history, {
+    List<WatchHistory>? sectionHistories,
+  }) async {
+    final queue = await _buildLiveQueue(sectionHistories ?? [history]);
+
     if (isXtreamCode) {
       final liveStream = await _database.findLiveStreamById(
         history.streamId,
         AppState.currentPlaylist!.id,
       );
+      if (!context.mounted) return;
 
       navigateByContentType(
         context,
@@ -177,24 +181,72 @@ class WatchHistoryController extends ChangeNotifier {
           history.contentType,
           liveStream: liveStream,
         ),
+        queue: queue,
       );
     } else if (isM3u) {
       final liveStream = await _database.getM3uItemsByIdAndPlaylist(
         AppState.currentPlaylist!.id,
         history.streamId,
       );
+      if (liveStream == null || !context.mounted) return;
 
       navigateByContentType(
         context,
         ContentItem(
-          liveStream!.url,
+          liveStream.url,
           history.title,
           history.imagePath ?? '',
           history.contentType,
-          m3uItem: liveStream!,
+          m3uItem: liveStream,
         ),
+        queue: queue,
       );
     }
+  }
+
+  Future<List<ContentItem>> _buildLiveQueue(
+    List<WatchHistory> histories,
+  ) async {
+    final liveHistories = histories
+        .where((history) => history.contentType == ContentType.liveStream)
+        .toList();
+
+    if (isXtreamCode) {
+      final items = await Future.wait(
+        liveHistories.map((history) async {
+          final liveStream = await _database.findLiveStreamById(
+            history.streamId,
+            AppState.currentPlaylist!.id,
+          );
+          return ContentItem(
+            history.streamId,
+            history.title,
+            history.imagePath ?? '',
+            ContentType.liveStream,
+            liveStream: liveStream,
+          );
+        }),
+      );
+      return items;
+    }
+
+    final items = await Future.wait<ContentItem?>(
+      liveHistories.map((history) async {
+        final m3uItem = await _database.getM3uItemsByIdAndPlaylist(
+          AppState.currentPlaylist!.id,
+          history.streamId,
+        );
+        if (m3uItem == null) return null;
+        return ContentItem(
+          m3uItem.url,
+          history.title,
+          history.imagePath ?? '',
+          ContentType.liveStream,
+          m3uItem: m3uItem,
+        );
+      }),
+    );
+    return items.whereType<ContentItem>().toList();
   }
 
   Future<void> _playMovie(BuildContext context, WatchHistory history) async {

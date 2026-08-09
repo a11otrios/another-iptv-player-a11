@@ -1,14 +1,17 @@
 import 'package:another_iptv_player/database/database.dart';
 import 'package:another_iptv_player/models/category.dart';
+import 'package:another_iptv_player/models/category_type.dart';
 import 'package:another_iptv_player/models/content_type.dart';
 import 'package:another_iptv_player/models/live_stream.dart';
 import 'package:another_iptv_player/models/m3u_series.dart';
 import 'package:another_iptv_player/services/app_state.dart';
+import 'package:another_iptv_player/repositories/user_preferences.dart';
 
 import '../models/m3u_item.dart';
 import '../models/series.dart';
 import '../models/vod_streams.dart';
 import '../services/service_locator.dart';
+import '../utils/radio_station_filter.dart';
 
 class M3uRepository {
   final String _playlistId = AppState.currentPlaylist!.id;
@@ -17,7 +20,40 @@ class M3uRepository {
   M3uRepository();
 
   Future<List<Category>?> getCategories() async {
-    return await _database.getCategoriesByPlaylist(_playlistId);
+    final categories = await _database.getCategoriesByPlaylist(_playlistId);
+    final result = <Category>[];
+    final hideRadio = await UserPreferences.getHideRadioStations(
+      playlistId: _playlistId,
+    );
+    for (final type in CategoryType.values) {
+      final originalTypeCategories = categories
+          .where((category) => category.type == type)
+          .toList();
+      final typeCategories = hideRadio && type == CategoryType.live
+          ? originalTypeCategories.where(
+              (category) => !isLikelyRadioStation('', category.categoryName),
+            )
+          : originalTypeCategories;
+      await UserPreferences.syncCategoryOriginalOrder(
+        playlistId: _playlistId,
+        type: type,
+        categoryIds: originalTypeCategories.map(
+          (category) => category.categoryId,
+        ),
+      );
+      final order = await UserPreferences.getCategoryOrder(
+        playlistId: _playlistId,
+        type: type,
+      );
+      result.addAll(
+        UserPreferences.applyCategoryOrder(
+          typeCategories,
+          order,
+          (category) => category.categoryId,
+        ),
+      );
+    }
+    return result;
   }
 
   Future<List<M3uItem>?> getM3uItemsByCategoryId({
@@ -33,7 +69,7 @@ class M3uRepository {
     );
 
     if (liveStreams.isNotEmpty) {
-      return liveStreams;
+      return _filterRadioItems(liveStreams);
     }
     return null;
   }
@@ -48,7 +84,6 @@ class M3uRepository {
     return m3uItem;
   }
 
-
   Future<List<M3uItem>?> getM3uItems({
     int? top,
     ContentType? contentType,
@@ -56,13 +91,33 @@ class M3uRepository {
     var liveStreams = await _database.getM3uItemsByPlaylist(_playlistId);
 
     if (liveStreams.isNotEmpty) {
-      return liveStreams;
+      return _filterRadioItems(liveStreams);
     }
     return null;
   }
 
+  Future<List<M3uItem>> _filterRadioItems(List<M3uItem> items) async {
+    final hideRadio = await UserPreferences.getHideRadioStations(
+      playlistId: _playlistId,
+    );
+    if (!hideRadio) return items;
+    return items
+        .where(
+          (item) =>
+              item.contentType != ContentType.liveStream ||
+              !isLikelyRadioStation(item.name ?? '', item.groupTitle),
+        )
+        .toList();
+  }
+
   Future<List<LiveStream>> searchLiveStreams(String query) async {
-    return await _database.searchLiveStreams(_playlistId, query);
+    final streams = await _database.searchLiveStreams(_playlistId, query);
+    final hideRadio = await UserPreferences.getHideRadioStations(
+      playlistId: _playlistId,
+    );
+    return hideRadio
+        ? streams.where((stream) => !isLikelyRadioStation(stream.name)).toList()
+        : streams;
   }
 
   Future<List<VodStream>> searchMovies(String query) async {

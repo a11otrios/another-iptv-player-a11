@@ -1,18 +1,21 @@
 import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:another_iptv_player/database/database.dart';
 import 'package:another_iptv_player/models/api_configuration_model.dart';
 import 'package:another_iptv_player/models/api_response.dart';
 import 'package:another_iptv_player/models/category.dart';
+import 'package:another_iptv_player/models/epg_program.dart';
 import 'package:another_iptv_player/models/live_stream.dart';
 import 'package:another_iptv_player/models/series_response.dart';
 import 'package:another_iptv_player/models/vod_streams.dart';
 import 'package:another_iptv_player/models/series.dart';
 import 'package:another_iptv_player/utils/type_convertions.dart';
 import '../models/category_type.dart';
+import 'user_preferences.dart';
 import '../services/service_locator.dart';
-import 'package:another_iptv_player/services/event_bus.dart';
+import '../utils/radio_station_filter.dart';
 
 class IptvRepository {
   final ApiConfig _config;
@@ -25,6 +28,7 @@ class IptvRepository {
     String endpoint, {
     Map<String, String>? additionalParams,
     bool cacheBuster = false, // only add timestamp when true
+    Duration timeout = const Duration(minutes: 3),
   }) async {
     final params = Map<String, String>.from(_config.baseParams);
     if (additionalParams != null) {
@@ -39,10 +43,21 @@ class IptvRepository {
       '${_config.baseUrl}/$endpoint',
     ).replace(queryParameters: params);
 
-    return await http.get(uri, headers: {'Content-Type': 'application/json'});
+    final requestUri = kIsWeb
+        ? Uri.parse(
+            '/__proxy',
+          ).replace(queryParameters: {'url': uri.toString()})
+        : uri;
+
+    return await http
+        .get(requestUri, headers: {'Content-Type': 'application/json'})
+        .timeout(timeout);
   }
 
-  Future<ApiResponse?> getPlayerInfo({bool forceRefresh = false}) async {
+  Future<ApiResponse?> getPlayerInfo({
+    bool forceRefresh = false,
+    bool cacheResult = true,
+  }) async {
     try {
       if (!forceRefresh) {
         var userInfo = await _database.getUserInfoByPlaylistId(_playlistId);
@@ -57,14 +72,19 @@ class IptvRepository {
         }
       }
 
-      final response = await _makeRequest('player_api.php', cacheBuster: false);
+      final response = await _makeRequest(
+        'player_api.php',
+        cacheBuster: false,
+        timeout: const Duration(seconds: 30),
+      );
 
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body);
         var apiResponse = ApiResponse.fromJson(jsonData, _playlistId);
 
-        await _database.insertOrUpdateUserInfo(apiResponse.userInfo);
-        await _database.insertOrUpdateServerInfo(apiResponse.serverInfo);
+        if (cacheResult) {
+          await cachePlayerInfo(apiResponse);
+        }
 
         return apiResponse;
       } else {
@@ -73,9 +93,17 @@ class IptvRepository {
         );
       }
     } catch (e) {
-      print('Player Info Error: $e');
+      debugPrint('Player Info Error: $e');
       return null;
     }
+  }
+
+  Future<void> cachePlayerInfo(ApiResponse response) async {
+    final boundResponse = response.playlistId == _playlistId
+        ? response
+        : response.withPlaylistId(_playlistId);
+    await _database.insertOrUpdateUserInfo(boundResponse.userInfo);
+    await _database.insertOrUpdateServerInfo(boundResponse.serverInfo);
   }
 
   Future<List<LiveStream>?> getLiveChannelsFromApi({
@@ -110,7 +138,7 @@ class IptvRepository {
         );
       }
     } catch (e) {
-      print('Live Channels Error: $e');
+      debugPrint('Live Channels Error: $e');
       return null;
     }
   }
@@ -123,12 +151,20 @@ class IptvRepository {
       var liveStreams = await _database.getLiveStreams(_playlistId);
 
       if (liveStreams.isNotEmpty) {
-        return liveStreams;
+        final hideRadio = await UserPreferences.getHideRadioStations(
+          playlistId: _playlistId,
+        );
+        return hideRadio
+            ? liveStreams
+                  .where((stream) => !isLikelyRadioStation(stream.name))
+                  .toList()
+            : liveStreams;
       }
     } catch (e) {
-      print('Live Channels Error: $e');
+      debugPrint('Live Channels Error: $e');
       return null;
     }
+    return null;
   }
 
   Future<List<LiveStream>?> getLiveChannelsByCategoryId({
@@ -147,9 +183,10 @@ class IptvRepository {
         return liveStreams;
       }
     } catch (e) {
-      print('Live Channels Error: $e');
+      debugPrint('Live Channels Error: $e');
       return null;
     }
+    return null;
   }
 
   Future<LiveStream?> findLiveStreamById(String streamId) async {
@@ -160,7 +197,65 @@ class IptvRepository {
       );
       return liveStream;
     } catch (e) {
-      print('Live Channels Error: $e');
+      debugPrint('Live Channels Error: $e');
+      return null;
+    }
+  }
+
+  Future<List<EpgProgram>?> getShortEpg(
+    String streamId, {
+    int limit = 2,
+  }) async {
+    try {
+      final response = await _makeRequest(
+        'player_api.php',
+        additionalParams: {
+          'action': 'get_short_epg',
+          'stream_id': streamId,
+          'limit': limit.toString(),
+        },
+        cacheBuster: true,
+        timeout: const Duration(seconds: 20),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception(
+          'HTTP ${response.statusCode}: ${response.reasonPhrase}',
+        );
+      }
+
+      final jsonData = json.decode(response.body);
+      final listings = jsonData is Map<String, dynamic>
+          ? jsonData['epg_listings']
+          : jsonData is Map
+          ? jsonData['epg_listings']
+          : null;
+
+      if (listings is! List) {
+        return const [];
+      }
+
+      final programs =
+          listings
+              .whereType<Map>()
+              .map(
+                (item) =>
+                    EpgProgram.fromXtreamJson(Map<String, dynamic>.from(item)),
+              )
+              .where((program) => program.title.isNotEmpty)
+              .toList()
+            ..sort((a, b) {
+              final left = a.startTime;
+              final right = b.startTime;
+              if (left == null && right == null) return 0;
+              if (left == null) return 1;
+              if (right == null) return -1;
+              return left.compareTo(right);
+            });
+
+      return programs.take(limit).toList();
+    } catch (e) {
+      debugPrint('Short EPG Error: $e');
       return null;
     }
   }
@@ -199,7 +294,7 @@ class IptvRepository {
         );
       }
     } catch (e) {
-      print('Movies Error: $e');
+      debugPrint('Movies Error: $e');
       return null;
     }
   }
@@ -228,9 +323,10 @@ class IptvRepository {
         }
       }
     } catch (e) {
-      print('Movies Error: $e');
+      debugPrint('Movies Error: $e');
       return null;
     }
+    return null;
   }
 
   Future<List<SeriesStream>?> getSeriesFromApi({
@@ -267,67 +363,68 @@ class IptvRepository {
         );
       }
     } catch (e) {
-      print('Series Error: $e');
+      debugPrint('Series Error: $e');
       return null;
     }
   }
 
-   Future<List<SeriesStream>?> getSeries({
-     String? categoryId,
-     bool forceRefresh = false,
-     int? top,
-   }) async {
-     try {
-       if (categoryId != null) {
-         var series = await _database.getSeriesStreamsByCategoryAndPlaylistId(
-           categoryId: categoryId,
-           playlistId: _playlistId,
-           top: top,
-         );
+  Future<List<SeriesStream>?> getSeries({
+    String? categoryId,
+    bool forceRefresh = false,
+    int? top,
+  }) async {
+    try {
+      if (categoryId != null) {
+        var series = await _database.getSeriesStreamsByCategoryAndPlaylistId(
+          categoryId: categoryId,
+          playlistId: _playlistId,
+          top: top,
+        );
 
-         if (series.isNotEmpty) {
-           return series;
-         }
-       } else {
-         var series = await _database.getSeriesStreamsByPlaylistId(_playlistId);
+        if (series.isNotEmpty) {
+          return series;
+        }
+      } else {
+        var series = await _database.getSeriesStreamsByPlaylistId(_playlistId);
 
-         if (series.isNotEmpty) {
-           return series;
-         }
-       }
-     } catch (e) {
-       print('Series Error: $e');
-       return null;
-     }
-   }
+        if (series.isNotEmpty) {
+          return series;
+        }
+      }
+    } catch (e) {
+      debugPrint('Series Error: $e');
+      return null;
+    }
+    return null;
+  }
 
-   /// Fetch VOD movie info from API
-   Future<Map<String, dynamic>?> getVodInfo(String vodId) async {
-     try {
-       final response = await _makeRequest(
-         'player_api.php',
-         additionalParams: {'action': 'get_vod_info', 'vod_id': vodId},
-         cacheBuster: true,
-       );
+  /// Fetch VOD movie info from API
+  Future<Map<String, dynamic>?> getVodInfo(String vodId) async {
+    try {
+      final response = await _makeRequest(
+        'player_api.php',
+        additionalParams: {'action': 'get_vod_info', 'vod_id': vodId},
+        cacheBuster: true,
+      );
 
-       if (response.statusCode == 200) {
-         final jsonData = json.decode(response.body);
-         if (jsonData is Map<String, dynamic>) {
-           return jsonData;
-         } else if (jsonData is Map) {
-           return Map<String, dynamic>.from(jsonData);
-         }
-         return null;
-       } else {
-         throw Exception(
-           'HTTP ${response.statusCode}: ${response.reasonPhrase}',
-         );
-       }
-     } catch (e) {
-       print('VOD Info Error: $e');
-       return null;
-     }
-   }
+      if (response.statusCode == 200) {
+        final jsonData = json.decode(response.body);
+        if (jsonData is Map<String, dynamic>) {
+          return jsonData;
+        } else if (jsonData is Map) {
+          return Map<String, dynamic>.from(jsonData);
+        }
+        return null;
+      } else {
+        throw Exception(
+          'HTTP ${response.statusCode}: ${response.reasonPhrase}',
+        );
+      }
+    } catch (e) {
+      debugPrint('VOD Info Error: $e');
+      return null;
+    }
+  }
 
   Future<List<Category>?> getLiveCategories({bool forceRefresh = false}) async {
     return _getCategories(
@@ -363,7 +460,7 @@ class IptvRepository {
           type,
         );
         if (cachedCategories.isNotEmpty) {
-          return cachedCategories;
+          return _orderedCategories(cachedCategories, type);
         }
       }
 
@@ -384,21 +481,53 @@ class IptvRepository {
         await _database.deleteCategoriesByTypeAndPlaylist(_playlistId, type);
         await _database.insertCategories(categories);
 
-        return categories;
+        return _orderedCategories(categories, type);
       } else {
         throw Exception(
           'HTTP ${response.statusCode}: ${response.reasonPhrase}',
         );
       }
     } catch (e) {
-      print('${type.value} Categories Error: $e');
+      debugPrint('${type.value} Categories Error: $e');
       // Hata durumunda cache'den dön
       final cachedCategories = await _database.getCategoriesByTypeAndPlaylist(
         _playlistId,
         type,
       );
-      return cachedCategories.isNotEmpty ? cachedCategories : null;
+      return cachedCategories.isNotEmpty
+          ? _orderedCategories(cachedCategories, type)
+          : null;
     }
+  }
+
+  Future<List<Category>> _orderedCategories(
+    List<Category> categories,
+    CategoryType type,
+  ) async {
+    final hideRadio =
+        type == CategoryType.live &&
+        await UserPreferences.getHideRadioStations(playlistId: _playlistId);
+    final visibleCategories = hideRadio
+        ? categories
+              .where(
+                (category) => !isLikelyRadioStation('', category.categoryName),
+              )
+              .toList()
+        : categories;
+    await UserPreferences.syncCategoryOriginalOrder(
+      playlistId: _playlistId,
+      type: type,
+      categoryIds: categories.map((category) => category.categoryId),
+    );
+    final order = await UserPreferences.getCategoryOrder(
+      playlistId: _playlistId,
+      type: type,
+    );
+    return UserPreferences.applyCategoryOrder(
+      visibleCategories,
+      order,
+      (category) => category.categoryId,
+    );
   }
 
   Future<Map<CategoryType, List<Category>>?> getAllCategories({
@@ -417,7 +546,7 @@ class IptvRepository {
         CategoryType.series: results[2] ?? [],
       };
     } catch (e) {
-      print('Get All Categories Error: $e');
+      debugPrint('Get All Categories Error: $e');
       return await _database.getAllCategoriesByPlaylist(_playlistId);
     }
   }
@@ -438,7 +567,13 @@ class IptvRepository {
   }
 
   Future<List<LiveStream>> searchLiveStreams(String query) async {
-    return await _database.searchLiveStreams(_playlistId, query);
+    final streams = await _database.searchLiveStreams(_playlistId, query);
+    final hideRadio = await UserPreferences.getHideRadioStations(
+      playlistId: _playlistId,
+    );
+    return hideRadio
+        ? streams.where((stream) => !isLikelyRadioStation(stream.name)).toList()
+        : streams;
   }
 
   Future<List<VodStream>> searchMovies(String query) async {
@@ -460,16 +595,24 @@ class IptvRepository {
 
         if (seriesInfo != null) {
           // fetch main list to compare lastModified
-          final allSeries = await _database.getSeriesStreamsByPlaylistId(_playlistId);
+          final allSeries = await _database.getSeriesStreamsByPlaylistId(
+            _playlistId,
+          );
 
           bool isStale = false;
           try {
-            final seriesItem = allSeries.firstWhere((s) => s.seriesId == seriesId);
+            final seriesItem = allSeries.firstWhere(
+              (s) => s.seriesId == seriesId,
+            );
 
-            final cachedLast = (seriesItem.lastModified ?? '').toString().trim();
+            final cachedLast = (seriesItem.lastModified ?? '')
+                .toString()
+                .trim();
             final infoLast = (seriesInfo.lastModified ?? '').toString().trim();
 
-            if (cachedLast.isEmpty || infoLast.isEmpty || cachedLast != infoLast) {
+            if (cachedLast.isEmpty ||
+                infoLast.isEmpty ||
+                cachedLast != infoLast) {
               isStale = true;
             }
           } catch (e) {
@@ -478,26 +621,26 @@ class IptvRepository {
           }
 
           if (!isStale) {
-        final seasons = await _database.getSeasonsBySeriesId(
-          seriesId,
-          _playlistId,
-        );
-        final episodes = await _database.getEpisodesBySeriesId(
-          seriesId,
-          _playlistId,
-        );
+            final seasons = await _database.getSeasonsBySeriesId(
+              seriesId,
+              _playlistId,
+            );
+            final episodes = await _database.getEpisodesBySeriesId(
+              seriesId,
+              _playlistId,
+            );
 
-        if (seasons.isNotEmpty && episodes.isNotEmpty) {
-          return SeriesDetailResponse(
-            seriesInfo: seriesInfo,
-            seasons: seasons,
-            episodes: episodes,
-            playlistId: _playlistId,
-          );
+            if (seasons.isNotEmpty && episodes.isNotEmpty) {
+              return SeriesDetailResponse(
+                seriesInfo: seriesInfo,
+                seasons: seasons,
+                episodes: episodes,
+                playlistId: _playlistId,
+              );
+            }
+          }
         }
       }
-    }
-  }
 
       final response = await _makeRequest(
         'player_api.php',
@@ -532,7 +675,7 @@ class IptvRepository {
         );
       }
     } catch (e) {
-      print('Series Info Error: $e');
+      debugPrint('Series Info Error: $e');
       return null;
     }
   }
@@ -563,7 +706,7 @@ class IptvRepository {
         _playlistId,
       );
     } catch (e) {
-      print('Get Episodes By Season Error: $e');
+      debugPrint('Get Episodes By Season Error: $e');
       return [];
     }
   }
@@ -609,10 +752,10 @@ class IptvRepository {
             playlistId: drift.Value(_playlistId),
             airDate: drift.Value(safeString(season['air_date'])),
             episodeCount: drift.Value(safeInt(season['episode_count'])),
-            seasonId: drift.Value(safeInt(season['id']) ?? 0),
+            seasonId: drift.Value(safeInt(season['id'])),
             name: drift.Value(safeString(season['name'])),
             overview: drift.Value(safeString(season['overview'])),
-            seasonNumber: drift.Value(safeInt(season['season_number']) ?? 1),
+            seasonNumber: drift.Value(safeInt(season['season_number'])),
             voteAverage: drift.Value(safeInt(season['vote_average'])),
             cover: drift.Value(safeString(season['cover'])),
             coverBig: drift.Value(safeString(season['cover_big'])),
@@ -634,9 +777,12 @@ class IptvRepository {
               dynamic info = episode['info'];
 
               // Get season number from episodes, fallback to seasonKey if needed
-              int seasonNumber = safeInt(episode['season']) ?? 0;
+              int seasonNumber = safeInt(episode['season']);
               if (seasonNumber == 0) {
-                seasonNumber = safeInt(seasonKey) ?? 1;
+                seasonNumber = safeInt(seasonKey);
+              }
+              if (seasonNumber == 0) {
+                seasonNumber = 1;
               }
               seasonNumbersFromEpisodes.add(seasonNumber);
 
@@ -644,7 +790,7 @@ class IptvRepository {
                 seriesId: drift.Value(seriesId),
                 playlistId: drift.Value(_playlistId),
                 episodeId: drift.Value(safeString(episode['id'])),
-                episodeNum: drift.Value(safeInt(episode['episode_num']) ?? 0),
+                episodeNum: drift.Value(safeInt(episode['episode_num'])),
                 title: drift.Value(safeString(episode['title'])),
                 containerExtension: drift.Value(
                   safeString(episode['container_extension']),
@@ -683,7 +829,9 @@ class IptvRepository {
               try {
                 await _database.insertEpisode(episodeCompanion);
               } catch (e) {
-                print('Error inserting episode ${episode['id']} for series $seriesId: $e');
+                debugPrint(
+                  'Error inserting episode ${episode['id']} for series $seriesId: $e',
+                );
               }
             }
           }
@@ -712,7 +860,13 @@ class IptvRepository {
                 final seasonEpisodes = episodes[seasonKey];
                 if (seasonEpisodes is List) {
                   for (final episode in seasonEpisodes) {
-                    final epSeason = safeInt(episode['season']) ?? safeInt(seasonKey) ?? 1;
+                    var epSeason = safeInt(episode['season']);
+                    if (epSeason == 0) {
+                      epSeason = safeInt(seasonKey);
+                    }
+                    if (epSeason == 0) {
+                      epSeason = 1;
+                    }
                     if (epSeason == seasonNumber) {
                       episodeCount++;
                     }
@@ -736,16 +890,16 @@ class IptvRepository {
             );
 
             await _database.insertSeason(seasonCompanion);
-            print(
+            debugPrint(
               'Created missing season: $seasonNumber with $episodeCount episodes',
             );
           }
         }
       }
 
-      print('Series data saved to database successfully');
+      debugPrint('Series data saved to database successfully');
     } catch (e) {
-      print('Save series data to database error: $e');
+      debugPrint('Save series data to database error: $e');
       rethrow;
     }
   }

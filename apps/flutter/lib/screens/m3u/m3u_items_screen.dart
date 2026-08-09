@@ -1,4 +1,5 @@
 import 'package:another_iptv_player/l10n/localization_extension.dart';
+import 'package:another_iptv_player/controllers/favorites_controller.dart';
 import 'package:another_iptv_player/models/m3u_item.dart';
 import 'package:another_iptv_player/screens/m3u/m3u_player_screen.dart';
 import 'package:flutter/material.dart';
@@ -21,18 +22,46 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
   final TextEditingController _searchController = TextEditingController();
   bool isSearching = false;
   final ScrollController _chipScrollController = ScrollController();
+  final FavoritesController _favoritesController = FavoritesController();
+  final Set<String> _favoriteIds = {};
 
   @override
   void initState() {
     super.initState();
     filteredItems = widget.m3uItems;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadFavorites();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant M3uItemsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.m3uItems != widget.m3uItems) {
+      _filterItems(searchQuery);
+    }
   }
 
   @override
   void dispose() {
     _searchController.dispose();
     _chipScrollController.dispose();
+    _favoritesController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadFavorites() async {
+    await _favoritesController.loadFavorites();
+    if (!mounted) return;
+    setState(() {
+      _favoriteIds
+        ..clear()
+        ..addAll(
+          _favoritesController.favorites.map((favorite) {
+            return favorite.m3uItemId ?? favorite.streamId;
+          }),
+        );
+    });
   }
 
   void _filterItems(String query) {
@@ -161,7 +190,7 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
                     borderRadius: BorderRadius.circular(8),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.grey.withOpacity(0.1),
+                        color: Colors.grey.withValues(alpha: 0.1),
                         spreadRadius: 1,
                         blurRadius: 2,
                         offset: const Offset(0, 1),
@@ -214,7 +243,7 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
                             decoration: BoxDecoration(
                               color: _getContentTypeColor(
                                 channel,
-                              ).withOpacity(0.1),
+                              ).withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -225,6 +254,20 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
+                          ),
+                          IconButton(
+                            tooltip: _favoriteIds.contains(channel.id)
+                                ? context.loc.remove_from_favorites
+                                : context.loc.added_to_favorites,
+                            icon: Icon(
+                              _favoriteIds.contains(channel.id)
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              color: _favoriteIds.contains(channel.id)
+                                  ? Colors.red
+                                  : null,
+                            ),
+                            onPressed: () => _toggleFavorite(channel),
                           ),
                         ],
                       ),
@@ -309,8 +352,6 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
         return Colors.blue;
       case ContentType.series:
         return Colors.green;
-      default:
-        return Colors.grey;
     }
   }
 
@@ -322,8 +363,6 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
         return context.loc.movie_content;
       case ContentType.series:
         return context.loc.series_content;
-      default:
-        return context.loc.media_content;
     }
   }
 
@@ -331,16 +370,13 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
     if (m3uItem.groupTitle != null &&
         m3uItem.groupTitle!.isNotEmpty &&
         m3uItem.contentType != ContentType.series) {
-      navigateByContentType(
-        context,
-        ContentItem(
-          m3uItem.url,
-          m3uItem.name ?? '',
-          m3uItem.tvgLogo ?? '',
-          m3uItem.contentType,
-          m3uItem: m3uItem,
-        ),
-      );
+      final contentItem = _toContentItem(m3uItem);
+      final queue = filteredItems
+          .where((item) => item.contentType == m3uItem.contentType)
+          .map(_toContentItem)
+          .toList();
+
+      navigateByContentType(context, contentItem, queue: queue);
     } else {
       Navigator.push(
         context,
@@ -357,5 +393,53 @@ class _M3uItemsScreenState extends State<M3uItemsScreen> {
         ),
       );
     }
+  }
+
+  ContentItem _toContentItem(M3uItem item) {
+    return ContentItem(
+      item.url,
+      item.name ?? '',
+      item.tvgLogo ?? '',
+      item.contentType,
+      m3uItem: item,
+    );
+  }
+
+  Future<void> _toggleFavorite(M3uItem m3uItem) async {
+    final contentItem = ContentItem(
+      m3uItem.id,
+      m3uItem.name ?? context.loc.unknown_channel,
+      m3uItem.tvgLogo ?? '',
+      m3uItem.contentType,
+      m3uItem: m3uItem,
+    );
+    final isFavorite = _favoriteIds.contains(m3uItem.id);
+    final success = isFavorite
+        ? await _favoritesController.removeFavorite(
+            contentItem.id,
+            contentItem.contentType,
+          )
+        : await _favoritesController.addFavorite(contentItem);
+
+    if (!success || !mounted) return;
+
+    setState(() {
+      if (isFavorite) {
+        _favoriteIds.remove(m3uItem.id);
+      } else {
+        _favoriteIds.add(m3uItem.id);
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isFavorite
+              ? context.loc.removed_from_favorites
+              : context.loc.added_to_favorites,
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 }

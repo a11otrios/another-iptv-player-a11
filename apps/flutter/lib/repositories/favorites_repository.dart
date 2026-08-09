@@ -119,14 +119,11 @@ class FavoritesRepository {
       playlistId,
       contentItem.id,
       contentItem.contentType,
-      null
+      null,
     );
 
     if (isCurrentlyFavorite) {
-      await removeFavorite(
-        contentItem.id,
-        contentItem.contentType
-      );
+      await removeFavorite(contentItem.id, contentItem.contentType);
       return false;
     } else {
       await addFavorite(contentItem);
@@ -187,10 +184,13 @@ class FavoritesRepository {
             }
             break;
           case ContentType.series:
-            final series = await repository.getSeries(categoryId: '');
-            final seriesStream = series?.firstWhere(
-              (serie) => serie.seriesId == favorite.streamId,
-            );
+            final series = await repository.getSeries();
+            final matches = series
+                ?.where((serie) => serie.seriesId == favorite.streamId)
+                .toList();
+            final seriesStream = matches?.isNotEmpty == true
+                ? matches!.first
+                : null;
             if (seriesStream != null) {
               return ContentItem(
                 seriesStream.seriesId,

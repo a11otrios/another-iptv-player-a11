@@ -1,15 +1,20 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
+import 'package:another_iptv_player/models/subtitle_search_result.dart';
 import 'package:another_iptv_player/models/watch_history.dart';
 import 'package:another_iptv_player/repositories/user_preferences.dart';
 import 'package:another_iptv_player/services/app_state.dart';
+import 'package:another_iptv_player/services/channel_shortcut_service.dart';
 import 'package:another_iptv_player/services/event_bus.dart';
+import 'package:another_iptv_player/services/open_subtitles_service.dart';
 import 'package:another_iptv_player/services/watch_history_service.dart';
 import 'package:another_iptv_player/utils/get_playlist_type.dart';
 import 'package:another_iptv_player/utils/subtitle_configuration.dart';
 import 'package:another_iptv_player/widgets/video_widget.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide PlayerState;
@@ -44,16 +49,50 @@ class PlayerWidget extends StatefulWidget {
 
 class _PlayerWidgetState extends State<PlayerWidget>
     with WidgetsBindingObserver {
+  static final Map<LogicalKeyboardKey, int> _numberKeys = {
+    LogicalKeyboardKey.digit0: 0,
+    LogicalKeyboardKey.digit1: 1,
+    LogicalKeyboardKey.digit2: 2,
+    LogicalKeyboardKey.digit3: 3,
+    LogicalKeyboardKey.digit4: 4,
+    LogicalKeyboardKey.digit5: 5,
+    LogicalKeyboardKey.digit6: 6,
+    LogicalKeyboardKey.digit7: 7,
+    LogicalKeyboardKey.digit8: 8,
+    LogicalKeyboardKey.digit9: 9,
+    LogicalKeyboardKey.numpad0: 0,
+    LogicalKeyboardKey.numpad1: 1,
+    LogicalKeyboardKey.numpad2: 2,
+    LogicalKeyboardKey.numpad3: 3,
+    LogicalKeyboardKey.numpad4: 4,
+    LogicalKeyboardKey.numpad5: 5,
+    LogicalKeyboardKey.numpad6: 6,
+    LogicalKeyboardKey.numpad7: 7,
+    LogicalKeyboardKey.numpad8: 8,
+    LogicalKeyboardKey.numpad9: 9,
+  };
+  static final Map<LogicalKeyboardKey, String> _shortcutPageKeys = {
+    LogicalKeyboardKey.keyA: 'A',
+    LogicalKeyboardKey.keyS: 'S',
+    LogicalKeyboardKey.keyD: 'D',
+    LogicalKeyboardKey.keyF: 'F',
+    LogicalKeyboardKey.keyG: 'G',
+  };
+
   late StreamSubscription videoTrackSubscription;
   late StreamSubscription audioTrackSubscription;
   late StreamSubscription subtitleTrackSubscription;
+  late StreamSubscription externalSubtitleSubscription;
+  late StreamSubscription subtitleOffsetSubscription;
   late StreamSubscription contentItemIndexChangedSubscription;
   late StreamSubscription _connectivitySubscription;
 
   late Player _player;
   VideoController? _videoController;
   late WatchHistoryService watchHistoryService;
+  final OpenSubtitlesService _openSubtitlesService = OpenSubtitlesService();
   final MyAudioHandler _audioHandler = getIt<MyAudioHandler>();
+  final ChannelShortcutService _shortcutService = ChannelShortcutService();
   List<ContentItem>? _queue;
   late ContentItem contentItem;
   final PlayerErrorHandler _errorHandler = PlayerErrorHandler();
@@ -68,6 +107,13 @@ class _PlayerWidgetState extends State<PlayerWidget>
   Timer? _watchHistoryTimer;
   Duration? _pendingWatchDuration;
   Duration? _pendingTotalDuration;
+  bool _isShortcutSwitching = false;
+  String _shortcutPage = ChannelShortcutService.defaultPage;
+  int? _surfacePointer;
+  Offset? _surfacePointerStart;
+  bool _surfaceTapEligible = false;
+  DateTime? _lastSurfaceTap;
+  Timer? _surfaceTapTimer;
 
   @override
   void initState() {
@@ -86,6 +132,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
     watchHistoryService = WatchHistoryService();
 
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     videoTrackSubscription = EventBus()
         .on<VideoTrack>('video_track_changed')
         .listen((VideoTrack data) async {
@@ -104,7 +151,23 @@ class _PlayerWidgetState extends State<PlayerWidget>
         .on<SubtitleTrack>('subtitle_track_changed')
         .listen((SubtitleTrack data) async {
           _player.setSubtitleTrack(data);
-          await UserPreferences.setSubtitleTrack(data.language ?? 'null');
+          await UserPreferences.setSubtitleTrack(
+            data.id == 'no'
+                ? UserPreferences.subtitleOff
+                : data.language ?? 'auto',
+          );
+        });
+
+    externalSubtitleSubscription = EventBus()
+        .on<CachedSubtitle>('external_subtitle_selected')
+        .listen((CachedSubtitle data) async {
+          await _applyExternalSubtitle(data);
+        });
+
+    subtitleOffsetSubscription = EventBus()
+        .on<double>('subtitle_offset_changed')
+        .listen((double data) async {
+          await _setSubtitleOffset(data, persist: true);
         });
 
     _initializePlayer();
@@ -112,8 +175,10 @@ class _PlayerWidgetState extends State<PlayerWidget>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     // Cancel timer and save watch history one last time before disposing
     _watchHistoryTimer?.cancel();
+    _surfaceTapTimer?.cancel();
     if (_pendingWatchDuration != null) {
       // Use unawaited to save without blocking dispose
       _saveWatchHistory().catchError((e) {
@@ -127,6 +192,8 @@ class _PlayerWidgetState extends State<PlayerWidget>
     videoTrackSubscription.cancel();
     audioTrackSubscription.cancel();
     subtitleTrackSubscription.cancel();
+    externalSubtitleSubscription.cancel();
+    subtitleOffsetSubscription.cancel();
     contentItemIndexChangedSubscription.cancel();
     _connectivitySubscription.cancel();
     _errorHandler.reset();
@@ -157,7 +224,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
     } catch (e) {
       // Silently handle database errors to prevent crashes
       // The next save attempt will retry
-      print('Error saving watch history: $e');
+      debugPrint('Error saving watch history: $e');
     }
   }
 
@@ -177,6 +244,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
 
     List<MediaItem> mediaItems = [];
     var currentItemIndex = 0;
+    var initialQueueIndex = 0;
 
     if (_queue != null) {
       for (int i = 0; i < _queue!.length; i++) {
@@ -192,7 +260,9 @@ class _PlayerWidgetState extends State<PlayerWidget>
             title: item.name,
             artist: _getContentTypeDisplayName(),
             album: AppState.currentPlaylist?.name ?? '',
-            artUri: item.imagePath != null ? Uri.parse(item.imagePath!) : null,
+            artUri: item.imagePath.isEmpty
+                ? null
+                : Uri.tryParse(item.imagePath),
             playable: true,
             extras: {
               'url': item.url,
@@ -203,35 +273,25 @@ class _PlayerWidgetState extends State<PlayerWidget>
         );
 
         if (item.id == contentItem.id) {
-          currentItemIndex = i;
+          initialQueueIndex = i;
           _currentItemIndex = i;
 
           if (contentItem.contentType == ContentType.liveStream) {
             currentItemIndex = 0;
-            _currentItemIndex = 0;
             contentItem = item;
-
-            mediaItems.add(
-              MediaItem(
-                id: item.id.toString(),
-                title: item.name,
-                artist: _getContentTypeDisplayName(),
-                album: AppState.currentPlaylist?.name ?? '',
-                artUri: item.imagePath != null
-                    ? Uri.parse(item.imagePath!)
-                    : null,
-                playable: true,
-                extras: {'url': item.url, 'startPosition': 0},
-              ),
-            );
 
             EventBus().emit('player_content_item', item);
             EventBus().emit('player_content_item_index', i);
+          } else {
+            currentItemIndex = i;
           }
         }
       }
 
-      await _audioHandler.setQueue(mediaItems, initialIndex: currentItemIndex);
+      PlayerState.currentContent = contentItem;
+      PlayerState.currentIndex = _currentItemIndex;
+
+      await _audioHandler.setQueue(mediaItems, initialIndex: initialQueueIndex);
 
       if (contentItem.contentType != ContentType.liveStream) {
         var playlist = mediaItems.map((mediaItem) {
@@ -252,9 +312,9 @@ class _PlayerWidgetState extends State<PlayerWidget>
         id: contentItem.id.toString(),
         title: contentItem.name,
         artist: _getContentTypeDisplayName(),
-        artUri: contentItem.imagePath != null
-            ? Uri.parse(contentItem.imagePath!)
-            : null,
+        artUri: contentItem.imagePath.isEmpty
+            ? null
+            : Uri.tryParse(contentItem.imagePath),
         extras: {
           'url': contentItem.url,
           'startPosition': watchHistory?.watchDuration?.inMilliseconds ?? 0,
@@ -299,6 +359,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
         _isFirstCheck = false;
       }
 
+      if (!mounted) return;
       if (hasConnection) {
         if (_wasDisconnected &&
             contentItem.contentType == ContentType.liveStream &&
@@ -315,7 +376,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
             // TODO: Implement watch history duration for vod and series
             await _player.open(Media(contentItem.url));
           } catch (e) {
-            print('Error opening media: $e');
+            debugPrint('Error opening media: $e');
           }
         }
         _wasDisconnected = false;
@@ -355,12 +416,18 @@ class _PlayerWidgetState extends State<PlayerWidget>
       await _player.setAudioTrack(possibleAudioTrack);
 
       var selectedSubtitleLanguage = await UserPreferences.getSubtitleTrack();
-      var possibleSubtitleLanguage = event.subtitle.firstWhere(
-        (x) => x.language == selectedSubtitleLanguage,
-        orElse: SubtitleTrack.auto,
-      );
+      var possibleSubtitleLanguage =
+          selectedSubtitleLanguage == UserPreferences.subtitleOff
+          ? SubtitleTrack.no()
+          : event.subtitle.firstWhere(
+              (x) => x.language == selectedSubtitleLanguage,
+              orElse: SubtitleTrack.auto,
+            );
 
-      await _player.setSubtitleTrack(possibleSubtitleLanguage);
+      if (!PlayerState.selectedSubtitle.uri &&
+          !PlayerState.selectedSubtitle.data) {
+        await _player.setSubtitleTrack(possibleSubtitleLanguage);
+      }
     });
 
     _player.stream.track.listen((event) async {
@@ -398,7 +465,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
     });
 
     _player.stream.error.listen((error) async {
-      print('PLAYER ERROR -> $error');
+      debugPrint('PLAYER ERROR -> $error');
       if (error.contains('Failed to open')) {
         _errorHandler.handleError(
           error,
@@ -438,6 +505,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
       PlayerState.title = contentItem.name;
       EventBus().emit('player_content_item', contentItem);
       EventBus().emit('player_content_item_index', playlist.index);
+      unawaited(_loadCachedSubtitleForCurrentContent());
 
       // Kanal listesi açıksa güncelle
       if (_showChannelList && mounted) {
@@ -473,6 +541,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
             await _player.open(Playlist([Media(item.url)]), play: true);
             EventBus().emit('player_content_item', item);
             EventBus().emit('player_content_item_index', index);
+            unawaited(_loadCachedSubtitleForCurrentContent());
             _errorHandler.reset();
 
             // Kanal listesi açıksa güncelle
@@ -517,6 +586,59 @@ class _PlayerWidgetState extends State<PlayerWidget>
         isLoading = false;
       });
     }
+
+    await _loadCachedSubtitleForCurrentContent();
+  }
+
+  Future<void> _loadCachedSubtitleForCurrentContent() async {
+    final cached = await _openSubtitlesService.cachedForContent(contentItem);
+    if (cached == null) {
+      PlayerState.subtitleOffsetSeconds = 0.0;
+      EventBus().emit('player_track_changed', null);
+      return;
+    }
+    await _applyExternalSubtitle(cached);
+  }
+
+  Future<void> _applyExternalSubtitle(CachedSubtitle subtitle) async {
+    if (!await File(subtitle.filePath).exists()) {
+      _showPlayerMessage('Subtitle file not found');
+      return;
+    }
+
+    final track = SubtitleTrack.uri(
+      File(subtitle.filePath).uri.toString(),
+      title: subtitle.title,
+      language: subtitle.language,
+    );
+
+    await _player.setSubtitleTrack(track);
+    PlayerState.selectedSubtitle = track;
+    if (!PlayerState.subtitles.any((item) => item.id == track.id)) {
+      PlayerState.subtitles = [...PlayerState.subtitles, track];
+    }
+    await _setSubtitleOffset(subtitle.offsetSeconds, persist: false);
+    EventBus().emit('player_track_changed', null);
+    _showPlayerMessage('Subtitle loaded: ${subtitle.language}');
+  }
+
+  Future<void> _setSubtitleOffset(
+    double offsetSeconds, {
+    required bool persist,
+  }) async {
+    PlayerState.subtitleOffsetSeconds = offsetSeconds;
+    try {
+      await (_player.platform as dynamic).setProperty(
+        'sub-delay',
+        offsetSeconds.toStringAsFixed(3),
+      );
+    } catch (error) {
+      debugPrint('Subtitle offset is not supported on this platform: $error');
+    }
+    if (persist) {
+      await _openSubtitlesService.saveOffset(contentItem, offsetSeconds);
+    }
+    EventBus().emit('player_track_changed', null);
   }
 
   @override
@@ -533,12 +655,201 @@ class _PlayerWidgetState extends State<PlayerWidget>
   }
 
   void _changeChannel(int direction) {
-    if (_queue == null || _queue!.length <= 1) return;
+    final queue = PlayerState.queue ?? _queue;
+    if (queue == null || queue.length <= 1) return;
 
-    final newIndex = _currentItemIndex + direction;
-    if (newIndex < 0 || newIndex >= _queue!.length) return;
+    final newIndex = (_currentItemIndex + direction) % queue.length;
 
     EventBus().emit('player_content_item_index_changed', newIndex);
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (!mounted ||
+        event is! KeyDownEvent ||
+        contentItem.contentType != ContentType.liveStream) {
+      return false;
+    }
+
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+
+    final shortcutPage = _shortcutPageKeys[event.logicalKey];
+    if (shortcutPage != null) {
+      _shortcutPage = shortcutPage;
+      _showPlayerMessage('Shortcut page $shortcutPage');
+      return true;
+    }
+
+    final channelNumber = _numberKeys[event.logicalKey];
+    if (channelNumber != null) {
+      unawaited(_switchToShortcut(channelNumber));
+      return true;
+    }
+
+    final queue = PlayerState.queue ?? _queue;
+    if (queue == null || queue.length <= 1) return false;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _changeChannel(-1);
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _changeChannel(1);
+      return true;
+    }
+
+    return false;
+  }
+
+  Future<void> _switchToShortcut(int number) async {
+    if (_isShortcutSwitching) return;
+    _isShortcutSwitching = true;
+
+    try {
+      final shortcut = await _shortcutService.getShortcut(
+        number,
+        page: _shortcutPage,
+      );
+      if (!mounted) return;
+
+      if (shortcut == null) {
+        _showPlayerMessage('No channel assigned to $_shortcutPage$number');
+        return;
+      }
+
+      var queue = PlayerState.queue ?? _queue ?? [];
+      var index = queue.indexWhere((item) => item.id == shortcut.id);
+
+      if (index < 0) {
+        queue = await _loadShortcutCategory(shortcut);
+        if (!mounted) return;
+
+        if (queue.isEmpty) {
+          queue = [shortcut];
+        }
+        index = queue.indexWhere((item) => item.id == shortcut.id);
+        if (index < 0) {
+          queue = [...queue, shortcut];
+          index = queue.length - 1;
+        }
+
+        _queue = queue;
+        PlayerState.queue = queue;
+      }
+
+      EventBus().emit('player_content_item_index_changed', index);
+      _showPlayerMessage('$_shortcutPage$number: ${shortcut.name}');
+    } finally {
+      _isShortcutSwitching = false;
+    }
+  }
+
+  Future<List<ContentItem>> _loadShortcutCategory(ContentItem shortcut) async {
+    if (isXtreamCode) {
+      final categoryId = shortcut.liveStream?.categoryId;
+      if (categoryId == null || categoryId.isEmpty) return [shortcut];
+
+      final streams = await AppState.xtreamCodeRepository!
+          .getLiveChannelsByCategoryId(categoryId: categoryId);
+      return (streams ?? []).map((stream) {
+        return ContentItem(
+          stream.streamId,
+          stream.name,
+          stream.streamIcon,
+          ContentType.liveStream,
+          liveStream: stream,
+        );
+      }).toList();
+    }
+
+    final categoryId = shortcut.m3uItem?.categoryId;
+    if (categoryId == null || categoryId.isEmpty) return [shortcut];
+
+    final streams = await AppState.m3uRepository!.getM3uItemsByCategoryId(
+      categoryId: categoryId,
+    );
+    return (streams ?? []).map((stream) {
+      return ContentItem(
+        stream.url,
+        stream.name ?? 'NO NAME',
+        stream.tvgLogo ?? '',
+        ContentType.liveStream,
+        m3uItem: stream,
+      );
+    }).toList();
+  }
+
+  void _showPlayerMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
+  }
+
+  void _handleSurfacePointerDown(PointerDownEvent event, double surfaceHeight) {
+    const topControlsHeight = 72.0;
+    const bottomControlsHeight = 104.0;
+    final isPrimaryPointer = (event.buttons & kPrimaryButton) != 0;
+    final isInControlRegion =
+        event.localPosition.dy <= topControlsHeight ||
+        event.localPosition.dy >= surfaceHeight - bottomControlsHeight;
+    final hasOverlay =
+        _showChannelList ||
+        PlayerState.showVideoInfo ||
+        PlayerState.showVideoSettings;
+
+    _surfacePointer = event.pointer;
+    _surfacePointerStart = event.localPosition;
+    _surfaceTapEligible = isPrimaryPointer && !isInControlRegion && !hasOverlay;
+  }
+
+  void _handleSurfacePointerMove(PointerMoveEvent event) {
+    if (event.pointer != _surfacePointer || !_surfaceTapEligible) return;
+    final start = _surfacePointerStart;
+    if (start != null && (event.localPosition - start).distance > 10) {
+      _surfaceTapEligible = false;
+    }
+  }
+
+  void _handleSurfacePointerUp(PointerUpEvent event) {
+    if (event.pointer != _surfacePointer) return;
+    final shouldToggle = _surfaceTapEligible;
+    _resetSurfacePointer();
+    if (!shouldToggle) return;
+
+    final now = DateTime.now();
+    final previousTap = _lastSurfaceTap;
+    if (previousTap != null &&
+        now.difference(previousTap) < const Duration(milliseconds: 400)) {
+      _surfaceTapTimer?.cancel();
+      _surfaceTapTimer = null;
+      _lastSurfaceTap = null;
+      return;
+    }
+
+    _lastSurfaceTap = now;
+    _surfaceTapTimer?.cancel();
+    _surfaceTapTimer = Timer(const Duration(milliseconds: 400), () {
+      _lastSurfaceTap = null;
+      if (mounted) {
+        unawaited(_player.playOrPause());
+      }
+    });
+  }
+
+  void _handleSurfacePointerCancel(PointerCancelEvent event) {
+    if (event.pointer == _surfacePointer) {
+      _resetSurfacePointer();
+    }
+  }
+
+  void _resetSurfacePointer() {
+    _surfacePointer = null;
+    _surfacePointerStart = null;
+    _surfaceTapEligible = false;
   }
 
   Widget _buildChannelListOverlay(BuildContext context) {
@@ -573,7 +884,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
           });
         },
         child: Container(
-          color: Colors.black.withOpacity(0.3),
+          color: Colors.black.withValues(alpha: 0.3),
           child: Align(
             alignment: Alignment.centerRight,
             child: GestureDetector(
@@ -582,10 +893,10 @@ class _PlayerWidgetState extends State<PlayerWidget>
                 width: panelWidth,
                 height: double.infinity,
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.95),
+                  color: Colors.black.withValues(alpha: 0.95),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.5),
+                      color: Colors.black.withValues(alpha: 0.5),
                       blurRadius: 10,
                       spreadRadius: 2,
                     ),
@@ -597,7 +908,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.8),
+                        color: Colors.black.withValues(alpha: 0.8),
                         border: Border(
                           bottom: BorderSide(
                             color: Colors.grey[800]!,
@@ -686,8 +997,10 @@ class _PlayerWidgetState extends State<PlayerWidget>
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: isSelected
-              ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3)
-              : Colors.white.withOpacity(0.05),
+              ? Theme.of(
+                  context,
+                ).colorScheme.primaryContainer.withValues(alpha: 0.3)
+              : Colors.white.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(8),
           border: isSelected
               ? Border.all(
@@ -811,17 +1124,6 @@ class _PlayerWidgetState extends State<PlayerWidget>
     }
   }
 
-  String _formatDuration(Duration duration) {
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60);
-
-    if (hours > 0) {
-      return '${hours}s ${minutes}dk';
-    } else {
-      return '${minutes}dk';
-    }
-  }
-
   String _getContentTypeDisplayName() {
     switch (widget.contentItem.contentType) {
       case ContentType.liveStream:
@@ -935,52 +1237,68 @@ class _PlayerWidgetState extends State<PlayerWidget>
       );
     }
 
-    return GestureDetector(
-      onVerticalDragEnd: (details) {
-        if (_queue == null || _queue!.length <= 1) return;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final surfaceHeight = constraints.hasBoundedHeight
+            ? constraints.maxHeight
+            : MediaQuery.sizeOf(context).height;
+        return Listener(
+          onPointerDown: (event) =>
+              _handleSurfacePointerDown(event, surfaceHeight),
+          onPointerMove: _handleSurfacePointerMove,
+          onPointerUp: _handleSurfacePointerUp,
+          onPointerCancel: _handleSurfacePointerCancel,
+          child: GestureDetector(
+            onVerticalDragEnd: (details) {
+              if (_queue == null || _queue!.length <= 1) return;
 
-        // Yukarı swipe - sonraki kanal
-        if (details.primaryVelocity != null &&
-            details.primaryVelocity! < -500) {
-          _changeChannel(1);
-        }
-        // Aşağı swipe - önceki kanal
-        else if (details.primaryVelocity != null &&
-            details.primaryVelocity! > 500) {
-          _changeChannel(-1);
-        }
-      },
-      child: Stack(
-        children: [
-          getVideo(
-            context,
-            _videoController!,
-            PlayerState.subtitleConfiguration,
-          ),
-
-          if (widget.onFullscreen != null &&
-              (Theme.of(context).platform == TargetPlatform.macOS ||
-                  Theme.of(context).platform == TargetPlatform.windows ||
-                  Theme.of(context).platform == TargetPlatform.linux))
-            Positioned(
-              top: 8,
-              right: 8,
-              child: IconButton(
-                onPressed: widget.onFullscreen,
-                icon: const Icon(
-                  Icons.fullscreen,
-                  color: Colors.white,
-                  size: 24,
+              // Yukarı swipe - sonraki kanal
+              if (details.primaryVelocity != null &&
+                  details.primaryVelocity! < -500) {
+                _changeChannel(1);
+              }
+              // Aşağı swipe - önceki kanal
+              else if (details.primaryVelocity != null &&
+                  details.primaryVelocity! > 500) {
+                _changeChannel(-1);
+              }
+            },
+            child: Stack(
+              children: [
+                getVideo(
+                  context,
+                  _videoController!,
+                  PlayerState.subtitleConfiguration,
                 ),
-                style: IconButton.styleFrom(backgroundColor: Colors.black54),
-              ),
-            ),
 
-          // Kanal listesi overlay - normal mod için
-          if (_showChannelList && _queue != null && _queue!.length > 1)
-            _buildChannelListOverlay(context),
-        ],
-      ),
+                if (widget.onFullscreen != null &&
+                    (Theme.of(context).platform == TargetPlatform.macOS ||
+                        Theme.of(context).platform == TargetPlatform.windows ||
+                        Theme.of(context).platform == TargetPlatform.linux))
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: IconButton(
+                      onPressed: widget.onFullscreen,
+                      icon: const Icon(
+                        Icons.fullscreen,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black54,
+                      ),
+                    ),
+                  ),
+
+                // Kanal listesi overlay - normal mod için
+                if (_showChannelList && _queue != null && _queue!.length > 1)
+                  _buildChannelListOverlay(context),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

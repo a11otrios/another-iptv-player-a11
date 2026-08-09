@@ -8,14 +8,15 @@ class ContentGrid extends StatelessWidget {
   final List<ContentItem> items;
   final Function(ContentItem) onItemTap;
 
-  const ContentGrid({
-    super.key,
-    required this.items,
-    required this.onItemTap,
-  });
+  const ContentGrid({super.key, required this.items, required this.onItemTap});
 
   @override
   Widget build(BuildContext context) {
+    final itemIndexes = <Key, int>{
+      for (var index = 0; index < items.length; index++)
+        _contentKey(items[index]): index,
+    };
+
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -25,11 +26,20 @@ class ContentGrid extends StatelessWidget {
         mainAxisSpacing: 8,
       ),
       itemCount: items.length,
-      itemBuilder: (context, index) => ContentCard(
-        content: items[index],
-        width: 150,
-        onTap: () => onItemTap(items[index]),
-      ),
+      findChildIndexCallback: (key) => itemIndexes[key],
+      itemBuilder: (context, index) {
+        final item = items[index];
+        return ContentCard(
+          key: _contentKey(item),
+          content: item,
+          width: 150,
+          onTap: () => onItemTap(item),
+        );
+      },
     );
+  }
+
+  ValueKey<String> _contentKey(ContentItem content) {
+    return ValueKey('content-${content.contentType.name}-${content.id}');
   }
 }

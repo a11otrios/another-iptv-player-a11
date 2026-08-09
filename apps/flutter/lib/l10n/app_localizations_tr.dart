@@ -648,6 +648,18 @@ class AppLocalizationsTr extends AppLocalizations {
   String get hide_category => 'Kategorileri Gizle';
 
   @override
+  String get manage_categories => 'Kategorileri Yönet';
+
+  @override
+  String get hide_radio_stations => 'Radyo istasyonlarını gizle';
+
+  @override
+  String get move_to_top => 'En üste taşı';
+
+  @override
+  String get restore_original_position => 'Özgün konuma geri yükle';
+
+  @override
   String get rating => 'Puan';
 
   @override

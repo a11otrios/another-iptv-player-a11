@@ -33,7 +33,6 @@ class _MovieScreenState extends State<MovieScreen> {
   WatchHistory? _watchHistory;
   Map<String, dynamic>? _vodInfo;
   bool _isLoadingHistory = true;
-  bool _isLoadingVodInfo = true;
   List<ContentItem> _categoryMovies = [];
 
   @override
@@ -61,23 +60,26 @@ class _MovieScreenState extends State<MovieScreen> {
 
   Future<void> _loadCategoryMovies() async {
     try {
-      if (isXtreamCode && _repository != null) {
+      final repository = _repository;
+      if (isXtreamCode && repository != null) {
         final vod = widget.contentItem.vodStream;
         final categoryId = vod?.categoryId;
 
         if (categoryId != null) {
-          final movies = await _repository!.getMovies(categoryId: categoryId);
+          final movies = await repository.getMovies(categoryId: categoryId);
           if (movies != null && mounted) {
             setState(() {
               _categoryMovies = movies
-                  .map((x) => ContentItem(
-                        x.streamId,
-                        x.name,
-                        x.streamIcon,
-                        ContentType.vod,
-                        vodStream: x,
-                        containerExtension: x.containerExtension,
-                      ))
+                  .map(
+                    (x) => ContentItem(
+                      x.streamId,
+                      x.name,
+                      x.streamIcon,
+                      ContentType.vod,
+                      vodStream: x,
+                      containerExtension: x.containerExtension,
+                    ),
+                  )
                   .toList();
             });
           }
@@ -94,13 +96,15 @@ class _MovieScreenState extends State<MovieScreen> {
           if (items != null && mounted) {
             setState(() {
               _categoryMovies = items
-                  .map((x) => ContentItem(
-                        x.id,
-                        x.name ?? 'NO NAME',
-                        x.tvgLogo ?? '',
-                        ContentType.vod,
-                        m3uItem: x,
-                      ))
+                  .map(
+                    (x) => ContentItem(
+                      x.id,
+                      x.name ?? 'NO NAME',
+                      x.tvgLogo ?? '',
+                      ContentType.vod,
+                      m3uItem: x,
+                    ),
+                  )
                   .toList();
             });
           }
@@ -133,8 +137,10 @@ class _MovieScreenState extends State<MovieScreen> {
           ? widget.contentItem.id
           : widget.contentItem.m3uItem?.id ?? widget.contentItem.id;
 
-      final history =
-          await _watchHistoryService.getWatchHistory(playlist.id, streamId);
+      final history = await _watchHistoryService.getWatchHistory(
+        playlist.id,
+        streamId,
+      );
 
       if (!mounted) return;
       setState(() {
@@ -155,24 +161,22 @@ class _MovieScreenState extends State<MovieScreen> {
       if (!mounted) return;
       setState(() {
         _vodInfo = null;
-        _isLoadingVodInfo = false;
       });
       return;
     }
 
     try {
-      final info = await _repository!.getVodInfo(widget.contentItem.id);
+      final repository = _repository;
+      final info = await repository.getVodInfo(widget.contentItem.id);
 
       if (!mounted) return;
       setState(() {
         _vodInfo = info;
-        _isLoadingVodInfo = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _vodInfo = null;
-        _isLoadingVodInfo = false;
       });
     }
   }
@@ -189,13 +193,18 @@ class _MovieScreenState extends State<MovieScreen> {
     final value = history.watchDuration!.inMilliseconds / total;
     if (value <= 0) return null;
 
-    return (value.clamp(0.0, 1.0)) as double;
+    return value.clamp(0.0, 1.0);
   }
 
   String? get _posterUrl {
-    if (_vodInfo != null) {
-      final cover = _vodInfo!['cover_big'] ?? _vodInfo!['cover'];
-      if (cover is String && cover.isNotEmpty) return cover;
+    final metadataPoster = _vodInfoImageUrl([
+      'cover_big',
+      'cover',
+      'movie_image',
+      'poster_path',
+    ]);
+    if (metadataPoster != null) {
+      return metadataPoster;
     }
     if (widget.contentItem.coverPath?.isNotEmpty == true) {
       return widget.contentItem.coverPath;
@@ -207,55 +216,138 @@ class _MovieScreenState extends State<MovieScreen> {
   }
 
   String? get _backdropUrl {
-    if (_vodInfo != null) {
-      final backdrop = _vodInfo!['backdrop_path'];
-      if (backdrop is List && backdrop.isNotEmpty) {
-        return backdrop.first.toString();
-      } else if (backdrop is String && backdrop.isNotEmpty) {
-        return backdrop;
-      }
+    final backdrop = _vodInfoValue(['backdrop_path', 'backdrop']);
+    if (backdrop is List && backdrop.isNotEmpty) {
+      return _cleanMetadataImageUrl(backdrop.first);
+    } else if (backdrop is String && backdrop.isNotEmpty) {
+      return _cleanMetadataImageUrl(backdrop);
     }
     return null;
   }
 
   String? get _plotSummary {
-    if (_vodInfo != null) {
-      final plot = _vodInfo!['plot'];
-      if (plot is String && plot.isNotEmpty) {
-        return plot;
-      }
+    final plot = _vodInfoString(['plot', 'description', 'overview']);
+    if (plot != null) {
+      return plot;
     }
     return widget.contentItem.description?.trim();
   }
 
   String? get _directorInfo {
-    if (_vodInfo != null) {
-      final director = _vodInfo!['director'];
-      if (director is String && director.isNotEmpty) {
-        return director;
-      }
-    }
-    return null;
+    return _vodInfoString(['director', 'directors']);
   }
 
   String? get _castInfo {
-    if (_vodInfo != null) {
-      final cast = _vodInfo!['cast'];
-      if (cast is String && cast.isNotEmpty) {
-        return cast;
+    return _vodInfoString(['cast', 'actors']);
+  }
+
+  int? get _duration {
+    final durationSeconds = _vodInfoValue([
+      'duration_secs',
+      'durationSecs',
+      'runtime_secs',
+    ]);
+    final seconds = _parseInteger(durationSeconds);
+    if (seconds != null && seconds > 0) {
+      return seconds;
+    }
+
+    final duration = _vodInfoString(['duration', 'runtime']);
+    if (duration != null) {
+      final parts = duration.split(':');
+      if (parts.length >= 2) {
+        var parsedSeconds = 0;
+        for (final part in parts) {
+          final value = int.tryParse(part.trim());
+          if (value == null) {
+            parsedSeconds = 0;
+            break;
+          }
+          parsedSeconds = (parsedSeconds * 60) + value;
+        }
+        if (parsedSeconds > 0) {
+          return parsedSeconds;
+        }
+      }
+
+      final minutes = int.tryParse(duration);
+      if (minutes != null && minutes > 0) {
+        return minutes * 60;
+      }
+    }
+    return widget.contentItem.duration?.inSeconds;
+  }
+
+  Map<String, dynamic>? get _vodInfoDetails => _nestedVodInfoMap('info');
+
+  Map<String, dynamic>? get _vodMovieData => _nestedVodInfoMap('movie_data');
+
+  Map<String, dynamic>? _nestedVodInfoMap(String key) {
+    final data = _vodInfo?[key];
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    if (data is Map) {
+      return Map<String, dynamic>.from(data);
+    }
+    return null;
+  }
+
+  dynamic _vodInfoValue(List<String> keys) {
+    final sources = [
+      _vodInfoDetails,
+      _vodMovieData,
+      _vodInfo,
+    ].whereType<Map<String, dynamic>>();
+
+    for (final source in sources) {
+      for (final key in keys) {
+        final value = source[key];
+        if (value != null) {
+          return value;
+        }
       }
     }
     return null;
   }
 
-  int? get _duration {
-    if (_vodInfo != null) {
-      final duration = _vodInfo!['duration'];
-      if (duration is int) {
-        return duration;
-      }
+  String? _vodInfoString(List<String> keys) {
+    return _cleanMetadataString(_vodInfoValue(keys));
+  }
+
+  String? _vodInfoImageUrl(List<String> keys) {
+    return _cleanMetadataImageUrl(_vodInfoValue(keys));
+  }
+
+  String? _cleanMetadataString(dynamic value) {
+    if (value == null) return null;
+
+    final text = value.toString().trim();
+    if (text.isEmpty) return null;
+
+    final lower = text.toLowerCase();
+    if (lower == 'n/a' || lower == 'na' || lower == 'null') {
+      return null;
     }
-    return widget.contentItem.duration?.inSeconds;
+    return text;
+  }
+
+  String? _cleanMetadataImageUrl(dynamic value) {
+    final text = _cleanMetadataString(value);
+    if (text == null) return null;
+
+    final uri = Uri.tryParse(text);
+    if (uri == null || !uri.hasScheme) {
+      return null;
+    }
+    return text;
+  }
+
+  int? _parseInteger(dynamic value) {
+    if (value is int) return value;
+    if (value is double) return value.round();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
   }
 
   @override
@@ -481,33 +573,33 @@ class _MovieScreenState extends State<MovieScreen> {
       widget.contentItem.name,
       textAlign: textAlign,
       style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            shadows: [
-              Shadow(
-                blurRadius: 10,
-                color: Colors.black.withOpacity(0.5),
-                offset: const Offset(0, 2),
-              ),
-            ],
+        color: Colors.white,
+        fontWeight: FontWeight.bold,
+        shadows: [
+          Shadow(
+            blurRadius: 10,
+            color: Colors.black.withOpacity(0.5),
+            offset: const Offset(0, 2),
           ),
+        ],
+      ),
     );
   }
 
   Widget? _buildRatingSection(BuildContext context) {
     final vod = widget.contentItem.vodStream;
-    if (vod == null) {
-      return null;
-    }
 
     String? label;
-    final parsedRating = double.tryParse(vod.rating.trim());
+    final metadataRating = _vodInfoString(['rating', 'vote_average']);
+    final parsedRating = double.tryParse(
+      metadataRating ?? vod?.rating.trim() ?? '',
+    );
     if (parsedRating != null && parsedRating > 0) {
       final formatted = parsedRating % 1 == 0
           ? parsedRating.toStringAsFixed(0)
           : parsedRating.toStringAsFixed(1);
       label = '$formatted/10';
-    } else if (vod.rating5based > 0) {
+    } else if (vod != null && vod.rating5based > 0) {
       final formatted = vod.rating5based % 1 == 0
           ? vod.rating5based.toStringAsFixed(0)
           : vod.rating5based.toStringAsFixed(1);
@@ -521,18 +613,14 @@ class _MovieScreenState extends State<MovieScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(
-          Icons.star_rounded,
-          color: Colors.amber.shade500,
-          size: 28,
-        ),
+        Icon(Icons.star_rounded, color: Colors.amber.shade500, size: 28),
         const SizedBox(width: 8),
         Text(
           label,
           style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: Colors.white, // Ensure visibility on backdrop
-              ),
+            fontWeight: FontWeight.w700,
+            color: Colors.white, // Ensure visibility on backdrop
+          ),
         ),
       ],
     );
@@ -553,43 +641,30 @@ class _MovieScreenState extends State<MovieScreen> {
     }
 
     // Tür/Genre
-    final genre = widget.contentItem.vodStream?.genre ??
-        (_vodInfo != null ? _vodInfo!['genre'] : null);
-    if (genre is String && genre.trim().isNotEmpty) {
-      chips.add(
-        _InfoChip(
-          icon: Icons.local_movies,
-          label: genre.trim(),
-        ),
-      );
+    final genre =
+        _vodInfoString(['genre']) ?? widget.contentItem.vodStream?.genre;
+    if (genre != null && genre.trim().isNotEmpty) {
+      chips.add(_InfoChip(icon: Icons.local_movies, label: genre.trim()));
     }
 
     // Format
-    final format = (widget.contentItem.containerExtension ??
-            widget.contentItem.vodStream?.containerExtension)
-        ?.trim();
+    final format =
+        (widget.contentItem.containerExtension ??
+                widget.contentItem.vodStream?.containerExtension)
+            ?.trim();
     if (format != null && format.isNotEmpty) {
-      chips.add(
-        _InfoChip(
-          icon: Icons.sd_card,
-          label: format.toUpperCase(),
-        ),
-      );
+      chips.add(_InfoChip(icon: Icons.sd_card, label: format.toUpperCase()));
     }
 
     // Yayın Yılı / Released
-    if (_vodInfo != null) {
-      final releaseDate = _vodInfo!['releaseDate'] ??
-          _vodInfo!['release_date'] ??
-          _vodInfo!['year'];
-      if (releaseDate is String && releaseDate.trim().isNotEmpty) {
-        chips.add(
-          _InfoChip(
-            icon: Icons.calendar_today,
-            label: releaseDate.trim(),
-          ),
-        );
-      }
+    final releaseDate = _vodInfoString([
+      'releasedate',
+      'releaseDate',
+      'release_date',
+      'year',
+    ]);
+    if (releaseDate != null) {
+      chips.add(_InfoChip(icon: Icons.calendar_today, label: releaseDate));
     }
 
     if (chips.isEmpty) {
@@ -652,11 +727,7 @@ class _MovieScreenState extends State<MovieScreen> {
     final cast = _castInfo;
     if (cast != null && cast.isNotEmpty) {
       entries.add(
-        _DetailEntry(
-          icon: Icons.people,
-          title: context.loc.cast,
-          value: cast,
-        ),
+        _DetailEntry(icon: Icons.people, title: context.loc.cast, value: cast),
       );
     }
 
@@ -683,20 +754,19 @@ class _MovieScreenState extends State<MovieScreen> {
         Text(
           context.loc.info,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: Colors.white70,
-              ),
+            fontWeight: FontWeight.w700,
+            color: Colors.white70,
+          ),
         ),
         const SizedBox(height: 12),
         Wrap(
           spacing: 12,
           runSpacing: 12,
           children: entries
-              .map((e) => _DetailCard(
-                    icon: e.icon,
-                    title: e.title,
-                    value: e.value,
-                  ))
+              .map(
+                (e) =>
+                    _DetailCard(icon: e.icon, title: e.title, value: e.value),
+              )
               .toList(),
         ),
       ],
@@ -704,8 +774,7 @@ class _MovieScreenState extends State<MovieScreen> {
   }
 
   Widget? _buildTrailerButton(BuildContext context) {
-    final vod = widget.contentItem.vodStream;
-    if (vod == null || widget.contentItem.name.isEmpty) {
+    if (widget.contentItem.name.isEmpty) {
       return null;
     }
 
@@ -723,7 +792,8 @@ class _MovieScreenState extends State<MovieScreen> {
   Widget _buildPlayButton(BuildContext context) {
     final theme = Theme.of(context);
     final progress = _progress;
-    final hasProgress = !_isLoadingHistory &&
+    final hasProgress =
+        !_isLoadingHistory &&
         progress != null &&
         progress > 0.01 &&
         progress < 0.98 &&
@@ -754,9 +824,7 @@ class _MovieScreenState extends State<MovieScreen> {
           '${_formatDuration(_watchHistory!.watchDuration!)} / '
           '${_formatDuration(_watchHistory!.totalDuration!)}',
           textAlign: TextAlign.center,
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: Colors.white70,
-          ),
+          style: theme.textTheme.labelMedium?.copyWith(color: Colors.white70),
         ),
       );
       children.add(const SizedBox(height: 12));
@@ -812,13 +880,12 @@ class _MovieScreenState extends State<MovieScreen> {
   }
 
   Future<void> _openTrailer(BuildContext context) async {
-    final vod = widget.contentItem.vodStream;
-    if (vod == null) {
-      return;
-    }
-
-    final trailerKey = vod.youtubeTrailer;
+    final trailerKey =
+        _vodInfoString(['youtube_trailer', 'youtubeTrailer']) ??
+        widget.contentItem.vodStream?.youtubeTrailer;
     final languageCode = Localizations.localeOf(context).languageCode;
+    final messenger = ScaffoldMessenger.of(context);
+    final errorText = context.loc.error_occurred_title;
 
     final String urlString;
     if (trailerKey != null && trailerKey.isNotEmpty) {
@@ -831,15 +898,10 @@ class _MovieScreenState extends State<MovieScreen> {
     }
 
     final uri = Uri.parse(urlString);
-    final launched = await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-    );
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
 
     if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.loc.error_occurred_title)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(errorText)));
     }
   }
 
@@ -848,10 +910,9 @@ class _MovieScreenState extends State<MovieScreen> {
       MaterialPageRoute(
         builder: (_) => _MoviePlayerPage(
           contentItem: widget.contentItem,
-          queue:
-              _categoryMovies.isNotEmpty
-                  ? _categoryMovies
-                  : [widget.contentItem],
+          queue: _categoryMovies.isNotEmpty
+              ? _categoryMovies
+              : [widget.contentItem],
         ),
       ),
     );
@@ -863,11 +924,7 @@ class _DetailEntry {
   final String title;
   final String value;
 
-  _DetailEntry({
-    required this.icon,
-    required this.title,
-    required this.value,
-  });
+  _DetailEntry({required this.icon, required this.title, required this.value});
 }
 
 class _InfoChip extends StatelessWidget {
@@ -888,11 +945,7 @@ class _InfoChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            icon,
-            size: 16,
-            color: Colors.white70,
-          ),
+          Icon(icon, size: 16, color: Colors.white70),
           const SizedBox(width: 8),
           Text(
             label,
@@ -921,39 +974,43 @@ class _DetailCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white70, size: 20),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 11,
-                ),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320, minWidth: 220),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white70, size: 20),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }

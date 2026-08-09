@@ -657,6 +657,18 @@ class AppLocalizationsEs extends AppLocalizations {
   String get hide_category => 'Ocultar categorías';
 
   @override
+  String get manage_categories => 'Gestionar categorías';
+
+  @override
+  String get hide_radio_stations => 'Ocultar emisoras de radio';
+
+  @override
+  String get move_to_top => 'Mover al principio';
+
+  @override
+  String get restore_original_position => 'Restaurar posición original';
+
+  @override
   String get rating => 'Clasificación';
 
   @override

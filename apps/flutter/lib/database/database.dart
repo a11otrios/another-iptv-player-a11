@@ -1121,6 +1121,21 @@ class AppDatabase extends _$AppDatabase {
     return rows.map((row) => SeriesStream.fromDriftSeriesStream(row)).toList();
   }
 
+  Future<SeriesStream?> findSeriesById(
+    String seriesId,
+    String playlistId,
+  ) async {
+    final row =
+        await (select(seriesStreams)..where(
+              (table) =>
+                  table.playlistId.equals(playlistId) &
+                  table.seriesId.equals(seriesId),
+            ))
+            .getSingleOrNull();
+
+    return row == null ? null : SeriesStream.fromDriftSeriesStream(row);
+  }
+
   Future<List<SeriesStream>> getSeriesStreamsByCategoryAndPlaylistId({
     required String categoryId,
     required String playlistId,
@@ -1493,6 +1508,29 @@ class AppDatabase extends _$AppDatabase {
     final rows = await query.get();
 
     return rows.map((row) => M3uSerie.fromData(row)).toList();
+  }
+
+  Future<List<M3uSerie>> getM3uSeriesByPlaylistId(String playlistId) async {
+    final rows = await (select(
+      m3uSeries,
+    )..where((series) => series.playlistId.equals(playlistId))).get();
+
+    return rows.map((row) => M3uSerie.fromData(row)).toList();
+  }
+
+  Future<M3uSerie?> findM3uSeriesById(
+    String playlistId,
+    String seriesId,
+  ) async {
+    final row =
+        await (select(m3uSeries)..where(
+              (series) =>
+                  series.playlistId.equals(playlistId) &
+                  series.seriesId.equals(seriesId),
+            ))
+            .getSingleOrNull();
+
+    return row == null ? null : M3uSerie.fromData(row);
   }
 
   Future<List<M3uEpisode>> getM3uEpisodesBySeriesId(

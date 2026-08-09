@@ -198,19 +198,12 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
     case WM_SIZE: {
-      RECT rect = GetClientArea();
-      if (child_content_ != nullptr) {
-        // Size and position the child window.
-        MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
-                   rect.bottom - rect.top, TRUE);
-      }
+      ResizeChildContent();
       return 0;
     }
 
     case WM_ACTIVATE:
-      if (child_content_ != nullptr) {
-        SetFocus(child_content_);
-      }
+      FocusChildContent();
       return 0;
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
@@ -241,12 +234,8 @@ Win32Window* Win32Window::GetThisFromHandle(HWND const window) noexcept {
 void Win32Window::SetChildContent(HWND content) {
   child_content_ = content;
   SetParent(content, window_handle_);
-  RECT frame = GetClientArea();
-
-  MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
-             frame.bottom - frame.top, true);
-
-  SetFocus(child_content_);
+  ResizeChildContent();
+  FocusChildContent();
 }
 
 RECT Win32Window::GetClientArea() {
@@ -270,6 +259,22 @@ bool Win32Window::OnCreate() {
 
 void Win32Window::OnDestroy() {
   // No-op; provided for subclasses.
+}
+
+void Win32Window::ResizeChildContent() {
+  if (child_content_ == nullptr) {
+    return;
+  }
+
+  RECT rect = GetClientArea();
+  MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
+             rect.bottom - rect.top, TRUE);
+}
+
+void Win32Window::FocusChildContent() {
+  if (child_content_ != nullptr) {
+    SetFocus(child_content_);
+  }
 }
 
 void Win32Window::UpdateTheme(HWND const window) {

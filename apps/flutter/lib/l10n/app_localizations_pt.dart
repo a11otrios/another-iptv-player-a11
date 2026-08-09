@@ -654,6 +654,18 @@ class AppLocalizationsPt extends AppLocalizations {
   String get hide_category => 'Ocultar categorias';
 
   @override
+  String get manage_categories => 'Gerir categorias';
+
+  @override
+  String get hide_radio_stations => 'Ocultar estações de rádio';
+
+  @override
+  String get move_to_top => 'Mover para o topo';
+
+  @override
+  String get restore_original_position => 'Restaurar posição original';
+
+  @override
   String get rating => 'Avaliação';
 
   @override

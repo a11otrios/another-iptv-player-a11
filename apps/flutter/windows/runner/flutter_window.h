@@ -2,7 +2,9 @@
 #define RUNNER_FLUTTER_WINDOW_H_
 
 #include <flutter/dart_project.h>
+#include <flutter/encodable_value.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -23,11 +25,22 @@ class FlutterWindow : public Win32Window {
                          LPARAM const lparam) noexcept override;
 
  private:
+  void RegisterWindowChannel();
+  bool SetBorderless(bool enabled);
+  bool SetAlwaysOnTop(bool enabled);
+  bool ToggleMaximized();
+  bool RecoverWindowFrame();
+
   // The project to run.
   flutter::DartProject project_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      window_channel_;
+  LONG_PTR framed_window_style_ = 0;
+  bool borderless_enabled_ = false;
+  bool always_on_top_enabled_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

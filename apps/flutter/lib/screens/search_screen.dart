@@ -1,8 +1,10 @@
 import 'package:another_iptv_player/l10n/localization_extension.dart';
 import 'package:flutter/material.dart';
+import 'package:another_iptv_player/models/category_type.dart';
 import 'package:another_iptv_player/models/content_type.dart';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
 import 'package:another_iptv_player/repositories/iptv_repository.dart';
+import 'package:another_iptv_player/repositories/user_preferences.dart';
 import 'package:another_iptv_player/services/app_state.dart';
 import 'package:another_iptv_player/utils/navigate_by_content_type.dart';
 import 'package:another_iptv_player/utils/responsive_helper.dart';
@@ -26,6 +28,8 @@ class SearchScreenState extends State<SearchScreen> {
   FocusNode searchFocusNode = FocusNode();
   List<ContentItem> contentItems = [];
   IptvRepository repository = AppState.xtreamCodeRepository!;
+  final Map<String, String> _categoryNames = {};
+  Set<String> _hiddenCategoryKeys = {};
 
   @override
   void initState() {
@@ -98,12 +102,14 @@ class SearchScreenState extends State<SearchScreen> {
     });
 
     try {
+      await _loadCategoryMetadata();
       List<ContentItem> searchResults = [];
 
       switch (widget.contentType) {
         case ContentType.liveStream:
           var liveStreams = await repository.searchLiveStreams(value);
           searchResults = liveStreams
+              .where((x) => !_isHiddenCategory(CategoryType.live, x.categoryId))
               .map(
                 (x) => ContentItem(
                   x.streamId,
@@ -119,6 +125,7 @@ class SearchScreenState extends State<SearchScreen> {
         case ContentType.vod:
           var vodStreams = await repository.searchMovies(value);
           searchResults = vodStreams
+              .where((x) => !_isHiddenCategory(CategoryType.vod, x.categoryId))
               .map(
                 (x) => ContentItem(
                   x.streamId,
@@ -135,6 +142,11 @@ class SearchScreenState extends State<SearchScreen> {
         case ContentType.series:
           var series = await repository.searchSeries(value);
           searchResults = series
+              .where(
+                (x) =>
+                    x.categoryId == null ||
+                    !_isHiddenCategory(CategoryType.series, x.categoryId!),
+              )
               .map(
                 (x) => ContentItem(
                   x.seriesId,
@@ -158,6 +170,48 @@ class SearchScreenState extends State<SearchScreen> {
         isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadCategoryMetadata() async {
+    final hidden = await UserPreferences.getHiddenCategories(
+      playlistId: AppState.currentPlaylist?.id,
+    );
+    _hiddenCategoryKeys = hidden.toSet();
+
+    if (_categoryNames.isNotEmpty) return;
+
+    final categoriesByType = await repository.getAllCategories();
+    if (categoriesByType == null) return;
+
+    for (final entry in categoriesByType.entries) {
+      for (final category in entry.value) {
+        _categoryNames[_categoryKey(entry.key, category.categoryId)] =
+            category.categoryName;
+      }
+    }
+  }
+
+  bool _isHiddenCategory(CategoryType type, String categoryId) {
+    final key = UserPreferences.hiddenCategoryKey(type, categoryId);
+    return _hiddenCategoryKeys.contains(key) ||
+        _hiddenCategoryKeys.contains(categoryId);
+  }
+
+  String? _categoryNameFor(ContentItem item) {
+    final categoryId = switch (item.contentType) {
+      ContentType.liveStream => item.liveStream?.categoryId,
+      ContentType.vod => item.vodStream?.categoryId,
+      ContentType.series => item.seriesStream?.categoryId,
+    };
+    if (categoryId == null || categoryId.isEmpty) return null;
+    return _categoryNames[_categoryKey(
+      ContentType.toCategoryType(item.contentType),
+      categoryId,
+    )];
+  }
+
+  String _categoryKey(CategoryType type, String categoryId) {
+    return '${type.name}\u0000$categoryId';
   }
 
   @override
@@ -243,7 +297,9 @@ class SearchScreenState extends State<SearchScreen> {
     return ContentCard(
       content: contentItem,
       width: 150,
-      onTap: () => navigateByContentType(context, contentItem),
+      subtitle: _categoryNameFor(contentItem),
+      onTap: () =>
+          navigateByContentType(context, contentItem, queue: contentItems),
     );
   }
 

@@ -13,6 +13,7 @@ abstract class PlayerState {
 
   static List<SubtitleTrack> subtitles = [];
   static SubtitleTrack selectedSubtitle = SubtitleTrack.auto();
+  static double subtitleOffsetSeconds = 0.0;
 
   // --- FIX: ADD GLOBAL CONTENT ITEM VARIABLE ---
   static ContentItem? currentContent;
@@ -27,5 +28,5 @@ abstract class PlayerState {
   static String title = '';
   static bool backgroundPlay = true;
   static SubtitleViewConfiguration subtitleConfiguration =
-  SubtitleViewConfiguration();
+      SubtitleViewConfiguration();
 }

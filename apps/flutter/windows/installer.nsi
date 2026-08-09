@@ -1,51 +1,53 @@
-; NSIS Installer Script for Another IPTV Player
-; This script creates a Windows installer that installs the application
-; to Program Files and creates shortcuts.
+; Self-contained Windows installer for Another IPTV Player.
 
-;--------------------------------
-; Includes
+!ifndef APP_VERSION
+  !define APP_VERSION "1.6.0"
+!endif
 
+!ifndef APP_BUILD
+  !define APP_BUILD "29"
+!endif
+
+!ifndef VC_REDIST_PATH
+  !error "VC_REDIST_PATH must point to vc_redist.x64.exe"
+!endif
+
+!define APP_NAME "Another IPTV Player"
 !define APP_EXE "iptv_player.exe"
+!define APP_PUBLISHER "Another IPTV Player"
+!define APP_REG_KEY "Software\Another IPTV Player"
+!define APP_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player"
+!define APP_VERSION_NUMERIC "${APP_VERSION}.${APP_BUILD}"
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "x64.nsh"
 
-;--------------------------------
-; General
-
-; Name and file
-Name "Another IPTV Player"
-OutFile "another-iptv-player-windows-setup.exe"
+Name "${APP_NAME}"
+OutFile "..\build\installer\Another-IPTV-Player-Setup-${APP_VERSION}.exe"
 Unicode True
-
-; Default installation folder
-InstallDir "$PROGRAMFILES64\Another IPTV Player"
-
-; Get installation folder from registry if available
-InstallDirRegKey HKCU "Software\Another IPTV Player" ""
-
-; Request application privileges for Windows Vista/7/8/10/11
 RequestExecutionLevel admin
+InstallDir "$PROGRAMFILES64\${APP_NAME}"
+InstallDirRegKey HKLM "${APP_REG_KEY}" "InstallLocation"
+SetCompressor /SOLID lzma
+SetCompressorDictSize 64
+ManifestDPIAware True
+BrandingText "${APP_NAME}"
 
-; Version information
-VIProductVersion "1.3.0.0"
-VIAddVersionKey "ProductName" "Another IPTV Player"
-VIAddVersionKey "Comments" "A modern IPTV player application"
-VIAddVersionKey "CompanyName" "Another IPTV Player"
-VIAddVersionKey "LegalCopyright" "Copyright © 2025"
-VIAddVersionKey "FileDescription" "Another IPTV Player Installer"
-VIAddVersionKey "FileVersion" "1.3.0.0"
-VIAddVersionKey "ProductVersion" "1.3.0.0"
-
-;--------------------------------
-; Interface Settings
+VIProductVersion "${APP_VERSION_NUMERIC}"
+VIAddVersionKey "ProductName" "${APP_NAME}"
+VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
+VIAddVersionKey "FileDescription" "${APP_NAME} Installer"
+VIAddVersionKey "FileVersion" "${APP_VERSION_NUMERIC}"
+VIAddVersionKey "ProductVersion" "${APP_VERSION}"
+VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${APP_PUBLISHER}"
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
-!define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
-
-;--------------------------------
-; Pages
+!define MUI_ICON "runner\resources\app_icon.ico"
+!define MUI_UNICON "runner\resources\app_icon.ico"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch ${APP_NAME}"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "license.txt"
@@ -59,101 +61,91 @@ VIAddVersionKey "ProductVersion" "1.3.0.0"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 
-;--------------------------------
-; Languages
-
 !insertmacro MUI_LANGUAGE "English"
 
-;--------------------------------
-; Installer Sections
+Function .onInit
+  SetShellVarContext all
+  SetRegView 64
 
-Section "Another IPTV Player" SecMain
+  ${IfNot} ${RunningX64}
+    MessageBox MB_ICONSTOP "${APP_NAME} requires 64-bit Windows."
+    Abort
+  ${EndIf}
+FunctionEnd
 
+Function un.onInit
+  SetShellVarContext all
+  SetRegView 64
+FunctionEnd
+
+Section "${APP_NAME}" SecMain
   SectionIn RO
-  
-  ; Set output path to the installation directory
+  SetOverwrite on
 
   SetOutPath "$INSTDIR"
-  
-  ; Copy all files from the build directory
-  ; Note: In GitHub Actions, we're in windows/ directory, so we go up one level
-  File /r /x "*.pdb" /x "another-iptv-player-windows-*" "..\build\windows\x64\runner\Release\*"
-  
-  ; Store installation folder
-  WriteRegStr HKCU "Software\Another IPTV Player" "" $INSTDIR
-  
-  ; Create uninstaller
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
-  
-  ; Add to Add/Remove Programs
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                   "DisplayName" "Another IPTV Player"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-  "UninstallString" '"$INSTDIR\Uninstall.exe"'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                   "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                 "DisplayIcon" "$INSTDIR\${APP_EXE}"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                   "Publisher" "Another IPTV Player"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                   "DisplayVersion" "1.3.0"
-  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                     "NoModify" 1
-  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player" \
-                     "NoRepair" 1
+  File /r /x "*.pdb" "..\build\windows\x64\runner\Release\*"
 
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=vc_redist.x64.exe "${VC_REDIST_PATH}"
+  DetailPrint "Installing Microsoft Visual C++ Runtime..."
+  ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $0
+  Delete "$PLUGINSDIR\vc_redist.x64.exe"
+
+  ${If} $0 != 0
+  ${AndIf} $0 != 1638
+  ${AndIf} $0 != 3010
+    MessageBox MB_ICONSTOP "The Microsoft Visual C++ Runtime could not be installed (error $0)."
+    Abort
+  ${EndIf}
+
+  SetOutPath "$INSTDIR"
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+
+  WriteRegStr HKLM "${APP_REG_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "Publisher" "${APP_PUBLISHER}"
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKLM "${APP_UNINSTALL_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
+  WriteRegDWORD HKLM "${APP_UNINSTALL_KEY}" "NoModify" 1
+  WriteRegDWORD HKLM "${APP_UNINSTALL_KEY}" "NoRepair" 1
+
+  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+  IntFmt $0 "0x%08X" $0
+  WriteRegDWORD HKLM "${APP_UNINSTALL_KEY}" "EstimatedSize" $0
 SectionEnd
 
 Section "Start Menu Shortcuts" SecStartMenu
-
-  ; Create shortcuts
-  CreateDirectory "$SMPROGRAMS\Another IPTV Player"
-  CreateShortcut "$SMPROGRAMS\Another IPTV Player\Another IPTV Player.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-  CreateShortcut "$SMPROGRAMS\Another IPTV Player\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-
+  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
 SectionEnd
 
-Section "Desktop Shortcut" SecDesktop
-
-  CreateShortcut "$DESKTOP\Another IPTV Player.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-
-
+Section /o "Desktop Shortcut" SecDesktop
+  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 SectionEnd
 
-;--------------------------------
-; Descriptions
-
-; Language strings
-LangString DESC_SecMain ${LANG_ENGLISH} "Install Another IPTV Player application files."
+LangString DESC_SecMain ${LANG_ENGLISH} "Install the application, media engine, database libraries, and Microsoft runtime."
 LangString DESC_SecStartMenu ${LANG_ENGLISH} "Create Start Menu shortcuts."
 LangString DESC_SecDesktop ${LANG_ENGLISH} "Create a desktop shortcut."
 
-; Assign language strings to sections
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_SecMain)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} $(DESC_SecStartMenu)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} $(DESC_SecDesktop)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
-;--------------------------------
-; Uninstaller Section
-
 Section "Uninstall"
+  Delete "$DESKTOP\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
+  RMDir "$SMPROGRAMS\${APP_NAME}"
 
-  ; Remove files and uninstaller
-  Delete "$INSTDIR\Uninstall.exe"
+  DeleteRegKey HKLM "${APP_UNINSTALL_KEY}"
+  DeleteRegKey HKLM "${APP_REG_KEY}"
+
   RMDir /r "$INSTDIR"
-  
-  ; Remove shortcuts, if any
-  Delete "$SMPROGRAMS\Another IPTV Player\Another IPTV Player.lnk"
-  Delete "$SMPROGRAMS\Another IPTV Player\Uninstall.lnk"
-  RMDir "$SMPROGRAMS\Another IPTV Player"
-  Delete "$DESKTOP\Another IPTV Player.lnk"
-  
-  ; Remove registry keys
-  DeleteRegKey /ifempty HKCU "Software\Another IPTV Player"
-  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Another IPTV Player"
-
 SectionEnd
-
