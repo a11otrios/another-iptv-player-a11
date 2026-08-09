@@ -397,13 +397,14 @@ class _XtreamCodeHomeScreenState extends State<XtreamCodeHomeScreen> {
     );
   }
 
-  void _navigateToCategoryDetail(CategoryViewModel category) {
-    Navigator.push(
+  Future<void> _navigateToCategoryDetail(CategoryViewModel category) async {
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => CategoryDetailScreen(category: category),
       ),
     );
+    if (mounted) setState(() {});
   }
 
   BottomNavigationBar _buildBottomNavigationBar(

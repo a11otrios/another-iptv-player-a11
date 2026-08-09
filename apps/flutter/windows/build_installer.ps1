@@ -3,7 +3,7 @@ param(
   [string]$NsisPath,
   [string]$VcRedistPath,
   [string]$Version = "1.7.0",
-  [string]$BuildNumber = "30"
+  [string]$BuildNumber = "31"
 )
 
 $ErrorActionPreference = "Stop"

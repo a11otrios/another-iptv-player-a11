@@ -138,14 +138,14 @@ class CategoryDetailController extends ChangeNotifier {
 
   Future<void> sortItems(CategoryItemSort sort) async {
     _sort = sort;
+    _updateCategoryPreview();
+    notifyListeners();
     await UserPreferences.setCategoryItemSort(
       playlistId: category.category.playlistId,
       type: category.category.type,
       categoryId: category.category.categoryId,
       sort: sort,
     );
-    _updateCategoryPreview();
-    notifyListeners();
   }
 
   void _updateCategoryPreview() {

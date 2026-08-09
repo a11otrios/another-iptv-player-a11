@@ -43,7 +43,7 @@ void main() {
       '',
       ContentType.liveStream,
     );
-    var items = [first, second];
+    final items = [first, second];
     late StateSetter rebuildHost;
 
     await tester.pumpWidget(
@@ -78,7 +78,11 @@ void main() {
     expect(image.cacheKey, 'playlist-1:liveStream:channel-1');
     expect(image.useOldImageOnUrlChange, isTrue);
 
-    rebuildHost(() => items = [second, first]);
+    rebuildHost(() {
+      items
+        ..clear()
+        ..addAll([second, first]);
+    });
     await tester.pump();
 
     expect(tester.state(firstCardFinder), same(firstState));
