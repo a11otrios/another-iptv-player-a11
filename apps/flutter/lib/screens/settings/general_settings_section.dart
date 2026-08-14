@@ -5,6 +5,7 @@ import 'package:another_iptv_player/screens/settings/subtitle_settings_section.d
 import 'package:another_iptv_player/services/desktop_window_controller.dart';
 import 'package:another_iptv_player/services/portable_playlist_transfer_service.dart';
 import 'package:another_iptv_player/services/service_locator.dart';
+import 'package:another_iptv_player/services/xmltv_guide_service.dart';
 import 'package:another_iptv_player/utils/get_playlist_type.dart';
 import 'package:another_iptv_player/utils/show_loading_dialog.dart';
 import 'package:file_picker/file_picker.dart';
@@ -39,6 +40,7 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
   final AppDatabase database = getIt<AppDatabase>();
 
   bool _backgroundPlayEnabled = false;
+  bool _windowsPlaybackPerformanceMode = false;
   bool _isLoading = true;
   String? _selectedFilePath;
   String _selectedTheme = 'system';
@@ -52,6 +54,7 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
   String _openSubtitlesApiKey = '';
   String _openSubtitlesUsername = '';
   String _openSubtitlesLanguages = 'en';
+  String? _xmltvFallbackSource;
 
   @override
   void initState() {
@@ -62,6 +65,8 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
   Future<void> _loadSettings() async {
     try {
       final backgroundPlay = await UserPreferences.getBackgroundPlay();
+      final windowsPlaybackPerformanceMode =
+          await UserPreferences.getWindowsPlaybackPerformanceMode();
       final themeMode = await UserPreferences.getThemeMode();
       final brightnessGesture = await UserPreferences.getBrightnessGesture();
       final volumeGesture = await UserPreferences.getVolumeGesture();
@@ -74,9 +79,14 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
           await UserPreferences.getOpenSubtitlesUsername();
       final openSubtitlesLanguages =
           await UserPreferences.getOpenSubtitlesLanguages();
+      final playlistId = AppState.currentPlaylist?.id;
+      final xmltvFallbackSource = playlistId == null
+          ? null
+          : await UserPreferences.getXmltvFallbackSource(playlistId);
       final packageInfo = await PackageInfo.fromPlatform();
       setState(() {
         _backgroundPlayEnabled = backgroundPlay;
+        _windowsPlaybackPerformanceMode = windowsPlaybackPerformanceMode;
         _selectedTheme = _themeModeToString(themeMode);
         _brightnessGesture = brightnessGesture;
         _volumeGesture = volumeGesture;
@@ -86,6 +96,7 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
         _openSubtitlesApiKey = openSubtitlesApiKey;
         _openSubtitlesUsername = openSubtitlesUsername;
         _openSubtitlesLanguages = openSubtitlesLanguages;
+        _xmltvFallbackSource = xmltvFallbackSource;
         _appVersion = packageInfo.version;
         _isLoading = false;
       });
@@ -129,6 +140,14 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
         _backgroundPlayEnabled = !value;
       });
     }
+  }
+
+  Future<void> _saveWindowsPlaybackPerformanceMode(bool value) async {
+    await UserPreferences.setWindowsPlaybackPerformanceMode(value);
+    if (!mounted) return;
+    setState(() {
+      _windowsPlaybackPerformanceMode = value;
+    });
   }
 
   Future<void> _updateDesktopWindowSetting(
@@ -180,6 +199,16 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
               const SizedBox(height: 10),
               SectionTitleWidget(title: context.loc.general_settings),
               const LanServerSettingsCard(),
+              const SizedBox(height: 10),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.tv_outlined),
+                  title: const Text('XMLTV EPG fallback'),
+                  subtitle: Text(_xmltvSourceSummary(_xmltvFallbackSource)),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: _configureXmltvFallback,
+                ),
+              ),
               const SizedBox(height: 10),
               Card(
                 child: Column(
@@ -331,6 +360,20 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
                       value: _backgroundPlayEnabled,
                       onChanged: _saveBackgroundPlaySetting,
                     ),
+                    if (Platform.isWindows) ...[
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        secondary: const Icon(Icons.speed_outlined),
+                        title: const Text('Windows performance mode'),
+                        subtitle: const Text(
+                          'Cap oversized video surfaces at 1440p and use '
+                          'faster HDR processing. Applies when the next '
+                          'player opens.',
+                        ),
+                        value: _windowsPlaybackPerformanceMode,
+                        onChanged: _saveWindowsPlaybackPerformanceMode,
+                      ),
+                    ],
                     const Divider(height: 1),
                     ListTile(
                       leading: const Icon(Icons.subtitles_outlined),
@@ -474,6 +517,122 @@ class _GeneralSettingsWidgetState extends State<GeneralSettingsWidget> {
               ),
             ],
           );
+  }
+
+  String _xmltvSourceSummary(String? source) {
+    if (source == null || source.isEmpty) {
+      return 'Add an XMLTV URL or choose a local guide.';
+    }
+    if (XmltvGuideService.isRemoteUrl(source)) {
+      return 'Remote guide from ${Uri.parse(source).host}';
+    }
+    return source;
+  }
+
+  Future<void> _configureXmltvFallback() async {
+    final playlistId = AppState.currentPlaylist?.id;
+    if (playlistId == null) return;
+
+    final controller = TextEditingController(
+      text: XmltvGuideService.isRemoteUrl(_xmltvFallbackSource ?? '')
+          ? _xmltvFallbackSource
+          : '',
+    );
+    String? errorText;
+    final selectedSource = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('XMLTV EPG fallback'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Used when the playlist provider has no current EPG '
+                  'listings. The guide is downloaded by this PC and shared '
+                  'with paired TVs.',
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: InputDecoration(
+                    labelText: 'XMLTV URL',
+                    hintText: 'https://provider.example/epg.xml',
+                    helperText:
+                        'URLs containing provider credentials stay on this PC.',
+                    errorText: errorText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            if (_xmltvFallbackSource != null)
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, ''),
+                child: const Text('Remove'),
+              ),
+            TextButton(
+              onPressed: () async {
+                final result = await FilePicker.platform.pickFiles(
+                  dialogTitle: 'Select XMLTV EPG fallback guide',
+                  type: FileType.custom,
+                  allowedExtensions: const ['xml', 'xmltv', 'gz'],
+                  allowMultiple: false,
+                );
+                final path = result?.files.single.path;
+                if (path != null && dialogContext.mounted) {
+                  Navigator.pop(dialogContext, path);
+                }
+              },
+              child: const Text('Choose file'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(context.loc.cancel),
+            ),
+            FilledButton(
+              onPressed: () {
+                final source = controller.text.trim();
+                if (!XmltvGuideService.isRemoteUrl(source)) {
+                  setDialogState(() {
+                    errorText = 'Enter a valid http:// or https:// URL.';
+                  });
+                  return;
+                }
+                Navigator.pop(dialogContext, source);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (selectedSource == null) return;
+
+    final previousSource = _xmltvFallbackSource;
+    if (previousSource != null) {
+      XmltvGuideService.instance.invalidate(previousSource);
+    }
+    final normalizedSource = selectedSource.trim();
+    if (normalizedSource.isNotEmpty) {
+      XmltvGuideService.instance.invalidate(normalizedSource);
+    }
+    await UserPreferences.setXmltvFallbackSource(
+      playlistId,
+      normalizedSource.isEmpty ? null : normalizedSource,
+    );
+    if (!mounted) return;
+    setState(() {
+      _xmltvFallbackSource = normalizedSource.isEmpty ? null : normalizedSource;
+    });
   }
 
   refreshM3uPlaylist() async {

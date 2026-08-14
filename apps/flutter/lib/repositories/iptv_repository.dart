@@ -15,6 +15,7 @@ import 'package:another_iptv_player/utils/type_convertions.dart';
 import '../models/category_type.dart';
 import 'user_preferences.dart';
 import '../services/service_locator.dart';
+import '../services/xmltv_guide_service.dart';
 import '../utils/radio_station_filter.dart';
 
 typedef IptvHttpGet =
@@ -212,6 +213,7 @@ class IptvRepository {
     String streamId, {
     int limit = 2,
   }) async {
+    List<EpgProgram> providerPrograms = const [];
     try {
       var listings = await _getEpgListings(
         streamId,
@@ -252,10 +254,33 @@ class IptvRepository {
         return program.endTime == null;
       });
 
-      return relevant.take(limit).toList();
+      providerPrograms = relevant.take(limit).toList();
     } catch (e) {
       debugPrint('Short EPG Error: $e');
-      return null;
+    }
+
+    if (providerPrograms.isNotEmpty) return providerPrograms;
+    return _getXmltvFallback(streamId, limit: limit);
+  }
+
+  Future<List<EpgProgram>?> _getXmltvFallback(
+    String streamId, {
+    required int limit,
+  }) async {
+    try {
+      final source = await UserPreferences.getXmltvFallbackSource(_playlistId);
+      if (source == null) return const [];
+      final stream = await findLiveStreamById(streamId);
+      if (stream == null) return const [];
+      return XmltvGuideService.instance.programsFor(
+        source: source,
+        channelId: stream.epgChannelId,
+        channelName: stream.name,
+        limit: limit,
+      );
+    } catch (e) {
+      debugPrint('XMLTV fallback error: $e');
+      return const [];
     }
   }
 

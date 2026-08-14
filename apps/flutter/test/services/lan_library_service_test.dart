@@ -53,6 +53,55 @@ void main() {
     expect(items.single['name'], 'Cartoon One');
   });
 
+  test('category-scoped search only matches item names', () async {
+    SharedPreferences.setMockInitialValues({});
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await database.insertPlaylist(
+      Playlist(
+        id: 'playlist-category-search',
+        name: 'Playlist',
+        type: PlaylistType.m3u,
+        createdAt: DateTime(2026),
+      ),
+    );
+    await database.insertCategories([
+      Category(
+        categoryId: 'children',
+        categoryName: 'EN | Children',
+        parentId: 0,
+        playlistId: 'playlist-category-search',
+        type: CategoryType.live,
+      ),
+    ]);
+    await database.insertM3uItem(
+      M3uItem(
+        id: 'channel-1',
+        playlistId: 'playlist-category-search',
+        name: 'Cartoon One',
+        categoryId: 'children',
+        url: 'https://example.invalid/live',
+        contentType: ContentType.liveStream,
+      ),
+    );
+
+    final categoryNameResult = await LanLibraryService(database).items(
+      playlistId: 'playlist-category-search',
+      contentType: ContentType.liveStream,
+      categoryId: 'children',
+      query: 'children',
+    );
+    final itemNameResult = await LanLibraryService(database).items(
+      playlistId: 'playlist-category-search',
+      contentType: ContentType.liveStream,
+      categoryId: 'children',
+      query: 'cartoon',
+    );
+
+    expect(categoryNameResult['items'], isEmpty);
+    expect((itemNameResult['items'] as List).single, isNotNull);
+  });
+
   test('categories follow the desktop saved order', () async {
     SharedPreferences.setMockInitialValues({});
     final database = AppDatabase(NativeDatabase.memory());

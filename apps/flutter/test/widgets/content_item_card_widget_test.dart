@@ -76,6 +76,8 @@ void main() {
       ),
     );
     expect(image.cacheKey, 'playlist-1:liveStream:channel-1');
+    expect(image.memCacheWidth, (150 * tester.view.devicePixelRatio).ceil());
+    expect(image.memCacheHeight, isNull);
     expect(image.useOldImageOnUrlChange, isTrue);
 
     rebuildHost(() {

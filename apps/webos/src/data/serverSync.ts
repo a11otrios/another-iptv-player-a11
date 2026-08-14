@@ -1,9 +1,9 @@
 import { ServerCategory, ServerClient, ServerItem } from "../api/serverClient";
 import {
   bulkPut,
-  clearCatalogStores,
   deletePlaylistRows,
   getDb,
+  isQuotaExceededError,
   pruneImageCache,
 } from "./db";
 import { CatalogKind, CategoryRecord, PlaylistRecord } from "./records";
@@ -16,6 +16,11 @@ export interface ServerSyncProgress {
   kind: CatalogKind;
   loaded: number;
   total: number;
+}
+
+interface CategorySnapshot {
+  kind: CatalogKind;
+  categories: ServerCategory[];
 }
 
 export type ServerSyncStage =
@@ -54,8 +59,60 @@ async function syncStage<T>(
 }
 
 let activeSync: Promise<PlaylistRecord[]> | null = null;
-const SERVER_CATALOG_MIGRATION_VERSION = 1;
+// Version 2 repeats the disposable-catalog cleanup for TVs that marked the
+// first migration complete before webOS had actually reclaimed enough quota.
+const SERVER_CATALOG_MIGRATION_VERSION = 2;
 const progressListeners = new Set<(progress: ServerSyncProgress) => void>();
+
+async function clearDisposableServerStorage(
+  clearCatalog: boolean,
+  forceQuotaWait = false,
+): Promise<void> {
+  const db = await getDb();
+  let reclaimed = (await db.count("imageCache")) > 0;
+  await db.clear("imageCache").catch(() => {});
+  const existing = await db.getAll("playlists");
+  if (
+    clearCatalog &&
+    existing.length > 0 &&
+    existing.every((item) => item.managedByServer)
+  ) {
+    // Keep the tiny synchronized category index: on a multi-playlist TV,
+    // clearing it while retrying playlist N would erase the already-written
+    // order for playlists 1..N-1. Only old mirrored item/detail stores are
+    // expendable here.
+    await db.clear("liveStreams");
+    await db.clear("vodStreams");
+    await db.clear("series");
+    await db.clear("seriesInfo");
+    await db.clear("vodInfo");
+    await db.clear("m3uChannels");
+    reclaimed = true;
+  }
+  // Chromium 53 updates its IndexedDB quota ledger asynchronously.
+  if (reclaimed || forceQuotaWait) {
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+}
+
+async function withStorageQuotaRecovery<T>(
+  operation: () => Promise<T>,
+  clearCatalogOnFailure: boolean,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isQuotaExceededError(error)) throw error;
+    await clearDisposableServerStorage(clearCatalogOnFailure, true);
+    return operation();
+  }
+}
+
+function notifyLibrarySynced(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("aiptv:library-synced"));
+  }
+}
 
 export function syncServerLibrary(
   client: ServerClient,
@@ -101,52 +158,76 @@ async function performServerSync(client: ServerClient): Promise<PlaylistRecord[]
     });
   }
 
-  for (const playlist of playlists) {
-    await syncPlaylist(client, playlist);
-    await syncStage("storage", () => db.put("playlists", playlist));
-  }
-  return playlists;
-}
-
-async function syncPlaylist(client: ServerClient, playlist: PlaylistRecord): Promise<void> {
-  const db = await getDb();
-  // Managed TVs retain the small navigation index; item pages stay on the
-  // desktop and are fetched as shelves/categories are opened.
-  const snapshots = await syncStage("categories", () =>
+  // Fetch every replacement category snapshot before deleting anything. If
+  // one playlist is unreachable, every last-good local snapshot survives.
+  const categorySnapshots = await syncStage("categories", () =>
     Promise.all(
-      (["live", "vod", "series"] as CatalogKind[]).map(async (kind) => ({
-        kind,
-        categories: await client.categories(playlist.id, kind),
+      playlists.map(async (playlist) => ({
+        playlist,
+        snapshots: await Promise.all(
+          (["live", "vod", "series"] as CatalogKind[]).map(async (kind) => ({
+            kind,
+            categories: await client.categories(playlist.id, kind),
+          })),
+        ),
       })),
     ),
   );
+  const migrationRequired =
+    settings.serverCatalogMigrationVersion < SERVER_CATALOG_MIGRATION_VERSION;
+  if (migrationRequired) {
+    await syncStage("storage", () => clearDisposableServerStorage(true));
+  }
+  for (const { playlist, snapshots } of categorySnapshots) {
+    await syncPlaylist(client, playlist, snapshots, migrationRequired);
+    await syncStage("storage", () => db.put("playlists", playlist));
+  }
+  if (migrationRequired) {
+    settings.serverCatalogMigrationVersion = SERVER_CATALOG_MIGRATION_VERSION;
+  }
+  notifyLibrarySynced();
+  return playlists;
+}
 
-  await syncStage("storage", async () => {
-    if (settings.serverCatalogMigrationVersion < SERVER_CATALOG_MIGRATION_VERSION) {
-      const existing = await db.getAll("playlists");
-      if (existing.length > 0 && existing.every((item) => item.managedByServer)) {
-        await clearCatalogStores(db);
-        // Chromium 53 can briefly reject new writes while reclaimed IndexedDB
-        // pages are being accounted for after a large catalog clear.
-        await new Promise((resolve) => setTimeout(resolve, 500));
+async function syncPlaylist(
+  client: ServerClient,
+  playlist: PlaylistRecord,
+  snapshots: CategorySnapshot[],
+  migrationRequired: boolean,
+): Promise<void> {
+  const db = await getDb();
+
+  await syncStage("storage", () =>
+    withStorageQuotaRecovery(async () => {
+      await deletePlaylistRows(
+        db,
+        playlist.id,
+        migrationRequired
+          ? [
+              "categories",
+              "liveStreams",
+              "vodStreams",
+              "series",
+              "seriesInfo",
+              "vodInfo",
+              "m3uChannels",
+            ]
+          : ["categories", "liveStreams", "vodStreams", "series"],
+      );
+      for (const { kind, categories } of snapshots) {
+        const visible = categories.filter((item) => !item.hidden);
+        const categoryRows: CategoryRecord[] = visible.map((item, index) => ({
+          id: `${playlist.id}_${kind}_${item.id}`,
+          playlistId: playlist.id,
+          kind,
+          categoryId: String(item.id),
+          name: item.name,
+          sortIndex: index,
+        }));
+        await bulkPut(db, "categories", categoryRows);
       }
-      settings.serverCatalogMigrationVersion = SERVER_CATALOG_MIGRATION_VERSION;
-    }
-
-    await deletePlaylistRows(db, playlist.id, ["categories", "liveStreams", "vodStreams", "series"]);
-    for (const { kind, categories } of snapshots) {
-      const visible = categories.filter((item) => !item.hidden);
-      const categoryRows: CategoryRecord[] = visible.map((item, index) => ({
-        id: `${playlist.id}_${kind}_${item.id}`,
-        playlistId: playlist.id,
-        kind,
-        categoryId: String(item.id),
-        name: item.name,
-        sortIndex: index,
-      }));
-      await bulkPut(db, "categories", categoryRows);
-    }
-  });
+    }, true),
+  );
   await Promise.all([
     syncStage("state", () => syncState(client, playlist.id)),
     syncStage("preferences", () => syncPreferences(client, playlist)),
@@ -183,7 +264,11 @@ async function syncPreferences(client: ServerClient, playlist: PlaylistRecord): 
 async function syncState(client: ServerClient, playlistId: string): Promise<void> {
   const db = await getDb();
   const [favorites, history] = await Promise.all([client.favorites(playlistId), client.history(playlistId)]);
-  await deletePlaylistRows(db, playlistId, ["favorites", "watchHistory"]);
-  await bulkPut(db, "favorites", favorites.map((item: any) => ({ id: `${playlistId}_${item.type}_${item.itemId}`, playlistId, kind: item.type, itemId: String(item.itemId), addedAt: Date.parse(item.createdAt) || Date.now(), name: item.name, imageURL: item.imageUrl })));
-  await bulkPut(db, "watchHistory", history.map((item: any) => ({ id: `${playlistId}_${item.type}_${item.itemId}`, playlistId, type: item.type, streamId: String(item.itemId), lastTimeMs: item.positionMs || 0, durationMs: item.durationMs || 0, lastWatchedAt: Date.parse(item.updatedAt) || Date.now(), title: item.title || "", imageURL: item.imageUrl, seriesId: item.seriesId })));
+  await syncStage("storage", () =>
+    withStorageQuotaRecovery(async () => {
+      await deletePlaylistRows(db, playlistId, ["favorites", "watchHistory"]);
+      await bulkPut(db, "favorites", favorites.map((item: any) => ({ id: `${playlistId}_${item.type}_${item.itemId}`, playlistId, kind: item.type, itemId: String(item.itemId), addedAt: Date.parse(item.createdAt) || Date.now(), name: item.name, imageURL: item.imageUrl })));
+      await bulkPut(db, "watchHistory", history.map((item: any) => ({ id: `${playlistId}_${item.type}_${item.itemId}`, playlistId, type: item.type, streamId: String(item.itemId), lastTimeMs: item.positionMs || 0, durationMs: item.durationMs || 0, lastWatchedAt: Date.parse(item.updatedAt) || Date.now(), title: item.title || "", imageURL: item.imageUrl, seriesId: item.seriesId })));
+    }, false),
+  );
 }

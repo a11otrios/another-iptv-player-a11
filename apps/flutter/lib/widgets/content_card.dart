@@ -220,10 +220,16 @@ class _ContentCardState extends State<ContentCard> {
   }
 
   Widget _buildImageContent(BuildContext context, bool isLiveStream) {
+    final memoryCacheWidth =
+        (widget.width * MediaQuery.devicePixelRatioOf(context)).ceil();
     final image = widget.content.imagePath.isNotEmpty
         ? CachedNetworkImage(
             imageUrl: widget.content.imagePath,
             cacheKey: _imageCacheKey,
+            // Decode cards close to their rendered size instead of retaining
+            // full-resolution poster bitmaps in Flutter's memory cache. Only
+            // constrain the width so the source aspect ratio is preserved.
+            memCacheWidth: memoryCacheWidth,
             fit: _getFitForContentType(),
             useOldImageOnUrlChange: true,
             placeholder: (context, url) => _buildTitleCard(context),

@@ -5,6 +5,7 @@ enum CategoryItemSort {
   nameAscending,
   nameDescending,
   releaseDate,
+  releaseDateAscending,
   rating;
 
   static CategoryItemSort fromPreference(String? value) {
@@ -48,6 +49,11 @@ int _compareItems(
         _releaseDateValue(first),
         _releaseDateValue(second),
       );
+    case CategoryItemSort.releaseDateAscending:
+      return _compareNullableAscending(
+        _releaseDateValue(first),
+        _releaseDateValue(second),
+      );
     case CategoryItemSort.rating:
       return _compareNullableDescending(_rating(first), _rating(second));
   }
@@ -60,6 +66,13 @@ int _compareNullableDescending(num? first, num? second) {
   if (first == null) return 1;
   if (second == null) return -1;
   return second.compareTo(first);
+}
+
+int _compareNullableAscending(num? first, num? second) {
+  if (first == null && second == null) return 0;
+  if (first == null) return 1;
+  if (second == null) return -1;
+  return first.compareTo(second);
 }
 
 int? _releaseDateValue(ContentItem item) {

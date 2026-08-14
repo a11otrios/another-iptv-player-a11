@@ -600,6 +600,13 @@ export function ContentTab({
   }, [active]);
 
   useEffect(() => {
+    if (!playlist.managedByServer) return;
+    const onSynced = () => setRefreshKey((n) => n + 1);
+    window.addEventListener("aiptv:library-synced", onSynced);
+    return () => window.removeEventListener("aiptv:library-synced", onSynced);
+  }, [playlist.id, playlist.managedByServer]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       const db = await getDb();
@@ -1133,6 +1140,13 @@ export function M3UBrowseTab({
   useEffect(() => {
     if (active) setRefreshKey((n) => n + 1);
   }, [active]);
+
+  useEffect(() => {
+    if (!playlist.managedByServer) return;
+    const onSynced = () => setRefreshKey((n) => n + 1);
+    window.addEventListener("aiptv:library-synced", onSynced);
+    return () => window.removeEventListener("aiptv:library-synced", onSynced);
+  }, [playlist.id, playlist.managedByServer]);
 
   useEffect(() => {
     let cancelled = false;

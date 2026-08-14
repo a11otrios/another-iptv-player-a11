@@ -38,12 +38,14 @@ The desktop Settings card reports whether the resolved binary is usable.
   firmware exposes those keys to web apps. LG reserves them on some models.
 - Circular D-pad Up/Down: navigate the player controls only; these do not
   change channels.
-- Blue: open the live-channel panel. Press Blue again to cycle shortcut pages
-  `A`, `S`, `D`, `F`, and `G`.
+- Yellow on Live TV: open the live-channel panel. Blue also opens it and,
+  while the panel is open, cycles shortcut pages `A`, `S`, `D`, `F`, and `G`.
 - `0`-`9`: play the desktop shortcut assigned on the active page.
-- Yellow: audio and subtitle tracks, online subtitle search, and subtitle
-  timing.
-- Green: cycle the stream's saved aspect mode.
+- Yellow on movies/episodes: audio and subtitle tracks, online subtitle
+  search, and subtitle timing.
+- Green: cycles the saved aspect preference, but LG's native video surface on
+  physical TVs ignores CSS `object-fit`. Use the TV's Picture > Aspect Ratio
+  setting until this control is redesigned.
 - Red: add or remove the current item from favorites.
 
 The remote's `...` button is reserved by webOS for the system More Actions
@@ -58,7 +60,7 @@ menu and is not delivered to applications as a dependable key event.
 3. Open Developer Mode again, enable Key Server, then run
    `pnpm exec ares-novacom --device tv --getkey` and enter the six-character
    passphrase shown by the TV.
-4. Run `pnpm run package` to produce `com.devyorg.anotheriptvplayer_1.7.6_all.ipk`.
+4. Run `pnpm run package` to produce `com.devyorg.anotheriptvplayer_1.7.16_all.ipk`.
 5. Run `pnpm run tv:smoke -- --device tv`. This checks connectivity, installs
    the IPK, verifies the app ID, and launches it. Use a different device name if
    that is how the TV was configured.

@@ -1,5 +1,7 @@
 import { ServerCategory, ServerClient, ServerItem } from "../api/serverClient";
 import { CatalogSection } from "./catalogCache";
+import { getCategories } from "./catalogRepo";
+import { getDb } from "./db";
 import {
   CatalogKind,
   CategoryRecord,
@@ -49,11 +51,32 @@ async function loadServerCatalogSection(
   const client = ServerClient.connected();
   if (!client) throw new Error("Desktop server is not connected");
   const shelves = await client.shelves(playlist.id, kind);
+  // The lightweight sync stores /categories in the exact desktop order.
+  // Apply that index here as the client-side source of truth as well, so an
+  // older /shelves response or a dashboard kept alive across sync cannot
+  // silently revert to provider order.
+  const syncedCategories = await getCategories(await getDb(), playlist.id, kind);
+  const syncedOrder = new Map(
+    syncedCategories.map((category, index) => [category.categoryId, index]),
+  );
+  const orderedShelves = shelves
+    .map((shelf, index) => ({ shelf, index }))
+    .sort((left, right) => {
+      const leftOrder = syncedOrder.get(String(left.shelf.category.id));
+      const rightOrder = syncedOrder.get(String(right.shelf.category.id));
+      if (leftOrder !== undefined && rightOrder !== undefined) {
+        return leftOrder - rightOrder;
+      }
+      if (leftOrder !== undefined) return -1;
+      if (rightOrder !== undefined) return 1;
+      return left.index - right.index;
+    })
+    .map(({ shelf }) => shelf);
   const categories: CategoryRecord[] = [];
   const items: ServerCatalogRecord[] = [];
   const byCategory = new Map<string, ServerCatalogRecord[]>();
   const categoryTotals = new Map<string, number>();
-  shelves.forEach((shelf, shelfIndex) => {
+  orderedShelves.forEach((shelf, shelfIndex) => {
     const categoryId = String(shelf.category.id);
     categories.push(categoryRecord(playlist.id, kind, shelf.category, shelfIndex));
     const records = shelf.items.map((item, itemIndex) => serverItemToRecord(item, itemIndex));

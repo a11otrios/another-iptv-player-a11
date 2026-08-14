@@ -3,6 +3,12 @@
 
 const PREFIX = "aiptv.";
 
+export type LaunchLocationPreference =
+  | { name: "dashboard"; playlistId: string }
+  | { name: "categoryGrid"; playlistId: string; kind: "live" | "vod" | "series" | "m3uGroup"; categoryId: string; title: string }
+  | { name: "movieDetail"; playlistId: string; vodId: string }
+  | { name: "seriesDetail"; playlistId: string; seriesId: string };
+
 export interface SubtitleStylePreference {
   fontSize: number;
   lineHeight: number;
@@ -37,6 +43,7 @@ interface SettingsShape {
   preferredSubtitleLanguage: string | null;
   subtitleStyle: SubtitleStylePreference;
   serverCatalogMigrationVersion: number;
+  lastLaunchLocation: LaunchLocationPreference | null;
 }
 
 const DEFAULTS: SettingsShape = {
@@ -49,6 +56,7 @@ const DEFAULTS: SettingsShape = {
   preferredSubtitleLanguage: null,
   subtitleStyle: DEFAULT_SUBTITLE_STYLE,
   serverCatalogMigrationVersion: 0,
+  lastLaunchLocation: null,
 };
 
 function read<K extends keyof SettingsShape>(key: K): SettingsShape[K] {
@@ -130,5 +138,11 @@ export const settings = {
   },
   set serverCatalogMigrationVersion(value: number) {
     write("serverCatalogMigrationVersion", value);
+  },
+  get lastLaunchLocation() {
+    return read("lastLaunchLocation");
+  },
+  set lastLaunchLocation(value: LaunchLocationPreference | null) {
+    write("lastLaunchLocation", value);
   },
 };

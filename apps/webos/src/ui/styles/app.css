@@ -673,6 +673,19 @@
   overflow: hidden;
 }
 
+.grid-header {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  margin-bottom: 28px;
+}
+
+.grid-header .screen-title {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
 .grid-count {
   color: #6f7684;
   font-weight: 400;

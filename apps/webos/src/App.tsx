@@ -6,6 +6,7 @@ import {
 import { exitApp } from "./env/platform";
 import { getDb } from "./data/db";
 import { getPlaylist } from "./data/playlistRepo";
+import { getCategories } from "./data/catalogRepo";
 import { settings } from "./data/settings";
 import { dispatchBack } from "./navigation/backHandler";
 import { KEY, normalizeKeyCode } from "./navigation/keys";
@@ -29,6 +30,11 @@ import { useLanguageVersion } from "./i18n/react";
 import { t } from "./i18n";
 import { ServerClient } from "./api/serverClient";
 import { syncServerLibrary } from "./data/serverSync";
+import {
+  LaunchLocation,
+  resumableLocation,
+  screenFromLaunchLocation,
+} from "./navigation/launchResume";
 import "./ui/styles/app.css";
 
 function renderScreen(screen: ScreenDescriptor) {
@@ -74,6 +80,28 @@ function renderScreen(screen: ScreenDescriptor) {
   }
 }
 
+async function launchLocationExists(
+  location: LaunchLocation,
+  playlistId: string,
+): Promise<boolean> {
+  const db = await getDb();
+  switch (location.name) {
+    case "dashboard":
+      return true;
+    // Server-managed libraries deliberately keep their item catalog on the
+    // desktop. Detail screens fetch these records on demand, so their absence
+    // from IndexedDB must not prevent a valid saved location from restoring.
+    case "movieDetail":
+    case "seriesDetail":
+      return true;
+    case "categoryGrid":
+      if (location.kind === "m3uGroup") return true;
+      return (await getCategories(db, playlistId, location.kind)).some(
+        (category) => category.categoryId === location.categoryId,
+      );
+  }
+}
+
 export function App() {
   const { stack, pop, reset, pendingFocusRestore, consumeFocusRestore } =
     useNavigation();
@@ -82,25 +110,39 @@ export function App() {
   const [exitArmed, setExitArmed] = useState(false);
   const exitTimer = useRef<number | undefined>(undefined);
 
-  // Cold start: auto-open the last used playlist (iOS attemptAutoLoad).
+  // Cold start restores the last browsed screen, but deliberately never
+  // reopens a player: unexpected auto-play is especially disruptive on TV.
   useEffect(() => {
     void (async () => {
       const client = ServerClient.connected();
       const lastId = settings.lastPlaylistId;
-      if (lastId) {
+      const savedLocation = settings.lastLaunchLocation as LaunchLocation | null;
+      const playlistId = savedLocation?.playlistId ?? lastId;
+      if (playlistId) {
         const db = await getDb();
-        const playlist = await getPlaylist(db, lastId);
+        const playlist = await getPlaylist(db, playlistId);
         if (playlist) {
-          // Seed the playlist list below the dashboard so Back pops to a
-          // live, state-retaining list instead of rebuilding it.
-          reset({ name: "playlists" }, { name: "dashboard", playlist });
+          const dashboard: ScreenDescriptor = { name: "dashboard", playlist };
+          const canRestore =
+            savedLocation?.playlistId === playlist.id &&
+            (await launchLocationExists(savedLocation, playlist.id));
+          // Seed the playlist list below the dashboard so Back remains
+          // predictable after a resumed category/detail screen.
+          if (canRestore && savedLocation.name !== "dashboard") {
+            reset(
+              { name: "playlists" },
+              dashboard,
+              screenFromLaunchLocation(savedLocation, playlist),
+            );
+          } else {
+            reset({ name: "playlists" }, dashboard);
+          }
         }
       }
       setBooted(true);
       if (client) {
         try {
           await syncServerLibrary(client);
-          window.dispatchEvent(new Event("aiptv:library-synced"));
         } catch (error) {
           // Cached snapshots remain usable while the desktop is temporarily off.
           console.warn("[server] refresh failed; using cached library", error);
@@ -108,6 +150,19 @@ export function App() {
       }
     })();
   }, [reset]);
+
+  // Persist the last non-player screen. If the app is closed during playback,
+  // the detail/category beneath it is the sensible, non-playing destination.
+  useEffect(() => {
+    if (!booted) return;
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const location = resumableLocation(stack[index].screen);
+      if (location) {
+        settings.lastLaunchLocation = location;
+        return;
+      }
+    }
+  }, [booted, stack]);
 
   // After a pop the covered screen is still mounted: return focus to the
   // exact control the user left (captured at push time).
@@ -133,6 +188,7 @@ export function App() {
         // whether it was pushed from the list or seeded at cold start.
         if (topScreen(stack).name === "dashboard") {
           settings.lastPlaylistId = null;
+          settings.lastLaunchLocation = null;
         }
         pop();
         return;

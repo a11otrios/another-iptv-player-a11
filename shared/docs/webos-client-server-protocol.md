@@ -85,6 +85,10 @@ Category responses follow the per-playlist, per-content-type order configured
 by the desktop app. Categories not present in the saved order are appended in
 provider order.
 
+When `categoryId` and `query` are both supplied to `items`, the query is scoped
+to item names inside that category. Without `categoryId`, search may also match
+the containing category name.
+
 The preference patch accepts `hiddenCategories`, `hideRadioStations`,
 `audioLanguage`, and `subtitleLanguage`. Radio visibility is owned per playlist
 by the desktop app for managed clients. TV track selections and the `__off__` subtitle sentinel are
@@ -93,9 +97,10 @@ written back so another TV or desktop playback session uses the same choice.
 Shortcut pages use the same `A`, `S`, `D`, `F`, and `G` model as the desktop
 player. Omitting `page` selects `A`; unsupported page names receive a validation
 error. Each response maps numeric strings `0` through `9` to opaque live-item
-identities and display metadata. On the TV, Blue opens the live-channel panel
-and cycles the active page; the webOS-reserved More Actions (`...`) button is
-not part of the application key contract.
+identities and display metadata. On the TV, Yellow opens the live-channel
+panel. Blue also opens it and cycles the active page while the panel is open;
+the webOS-reserved More Actions (`...`) button is not part of the application
+key contract.
 
 ## Playback
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:another_iptv_player/models/playlist_content_model.dart';
+import 'package:another_iptv_player/models/epg_program.dart';
 import 'package:another_iptv_player/repositories/user_preferences.dart';
 import 'package:another_iptv_player/services/app_state.dart';
 import 'package:another_iptv_player/services/event_bus.dart';
@@ -39,6 +40,7 @@ class _VideoChannelSelectorWidgetState
   static ScrollController? _categoriesScrollController;
   static ScrollController? _channelsScrollController;
   static Set<String> _hiddenCategoryKeys = {};
+  static final Map<String, Future<List<EpgProgram>?>> _epgFutures = {};
   static void hideOverlay() {
     _globalOverlayEntry?.remove();
     _globalOverlayEntry = null;
@@ -53,6 +55,7 @@ class _VideoChannelSelectorWidgetState
     _selectedSeason = null;
     _showSeasons = false;
     _hiddenCategoryKeys = {};
+    _epgFutures.clear();
     PlayerState.showChannelList = false;
   }
 
@@ -807,6 +810,8 @@ class _VideoChannelSelectorWidgetState
                         ),
                       ],
                     ),
+                    if (item.contentType == ContentType.liveStream)
+                      _buildEpgLine(item),
                   ],
                 ),
               ),
@@ -816,6 +821,45 @@ class _VideoChannelSelectorWidgetState
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildEpgLine(ContentItem item) {
+    final streamId = item.liveStream?.streamId;
+    final repository = AppState.xtreamCodeRepository;
+    if (streamId == null || streamId.isEmpty || repository == null) {
+      return const SizedBox.shrink();
+    }
+    final key = '${AppState.currentPlaylist?.id ?? ''}\u0000$streamId';
+    final future = _epgFutures.putIfAbsent(
+      key,
+      () => repository.getShortEpg(streamId, limit: 1),
+    );
+    return FutureBuilder<List<EpgProgram>?>(
+      future: future,
+      builder: (context, snapshot) {
+        final title = snapshot.data?.isNotEmpty == true
+            ? snapshot.data!.first.title
+            : null;
+        if (title == null || title.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: Row(
+            children: [
+              const Icon(Icons.schedule, size: 11, color: Colors.lightBlue),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

@@ -11,6 +11,7 @@ import 'package:another_iptv_player/services/open_subtitles_service.dart';
 import 'package:another_iptv_player/services/watch_history_service.dart';
 import 'package:another_iptv_player/utils/get_playlist_type.dart';
 import 'package:another_iptv_player/utils/subtitle_configuration.dart';
+import 'package:another_iptv_player/utils/windows_playback_performance.dart';
 import 'package:another_iptv_player/widgets/video_widget.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -86,6 +87,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
   late StreamSubscription subtitleOffsetSubscription;
   late StreamSubscription contentItemIndexChangedSubscription;
   late StreamSubscription _connectivitySubscription;
+  StreamSubscription<VideoParams>? _performanceVideoParamsSubscription;
 
   late Player _player;
   VideoController? _videoController;
@@ -186,6 +188,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
       });
     }
 
+    _performanceVideoParamsSubscription?.cancel();
     _player.dispose();
     _audioHandler.setPlayer(null);
     _audioHandler.stop();
@@ -236,6 +239,10 @@ class _PlayerWidgetState extends State<PlayerWidget>
     PlayerState.backgroundPlay = await UserPreferences.getBackgroundPlay();
     _audioHandler.setPlayer(_player);
     _videoController = VideoController(_player);
+    if (Platform.isWindows &&
+        await UserPreferences.getWindowsPlaybackPerformanceMode()) {
+      await _enableWindowsPlaybackPerformanceMode();
+    }
 
     var watchHistory = await watchHistoryService.getWatchHistory(
       AppState.currentPlaylist!.id,
@@ -588,6 +595,53 @@ class _PlayerWidgetState extends State<PlayerWidget>
     }
 
     await _loadCachedSubtitleForCurrentContent();
+  }
+
+  Future<void> _enableWindowsPlaybackPerformanceMode() async {
+    final controller = _videoController;
+    if (controller == null) return;
+
+    // Wait until media-kit has attached its own video-parameter listener. Our
+    // capped resize then runs after its source-resolution resize.
+    try {
+      await controller.platform.future;
+    } catch (error) {
+      debugPrint(
+        'Could not initialize the Windows performance video surface: $error',
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    final platform = _player.platform;
+    if (platform != null) {
+      for (final property in windowsPerformanceMpvProperties.entries) {
+        try {
+          await (platform as dynamic).setProperty(property.key, property.value);
+        } catch (error) {
+          debugPrint(
+            'Could not apply Windows playback performance property '
+            '${property.key}: $error',
+          );
+        }
+      }
+    }
+
+    _performanceVideoParamsSubscription = _player.stream.videoParams.listen((
+      params,
+    ) async {
+      final size = windowsPerformanceVideoSurfaceSize(
+        width: params.dw,
+        height: params.dh,
+        rotate: params.rotate,
+      );
+      if (size == null) return;
+      try {
+        await controller.setSize(width: size.width, height: size.height);
+      } catch (error) {
+        debugPrint('Could not cap Windows video surface: $error');
+      }
+    });
   }
 
   Future<void> _loadCachedSubtitleForCurrentContent() async {

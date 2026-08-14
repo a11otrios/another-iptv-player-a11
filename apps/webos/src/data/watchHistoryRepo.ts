@@ -27,6 +27,10 @@ export async function saveProgress(
   };
   const playlist = await db.get("playlists", entry.playlistId);
   const server = playlist?.managedByServer ? ServerClient.connected() : null;
+  // Keep the responsive TV mirror even if the desktop becomes unreachable
+  // after playback has started. The next successful desktop sync remains the
+  // authority and will reconcile this record.
+  await db.put("watchHistory", record);
   if (server) {
     await server.putHistory(entry.playlistId, entry.type, entry.streamId, {
       title: entry.title,
@@ -36,7 +40,6 @@ export async function saveProgress(
       durationMs: record.durationMs,
     });
   }
-  await db.put("watchHistory", record);
 }
 
 export function getHistoryEntry(
@@ -92,4 +95,17 @@ export async function getResumePositionMs(
   const entry = await getHistoryEntry(db, playlistId, type, streamId);
   if (!entry || entry.lastTimeMs < 5000) return undefined;
   return entry.lastTimeMs;
+}
+
+/**
+ * A zero supplied by a Restart action is explicit and must win. Otherwise the
+ * freshly persisted position wins over the snapshot captured when a detail
+ * screen originally opened.
+ */
+export function chooseResumePositionMs(
+  launchPositionMs: number | undefined,
+  persistedPositionMs: number | undefined,
+): number | undefined {
+  if (launchPositionMs === 0) return 0;
+  return persistedPositionMs ?? launchPositionMs;
 }

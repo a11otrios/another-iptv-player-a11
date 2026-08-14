@@ -15,6 +15,8 @@ class UserPreferences {
   static const String _keySubtitleTrack = 'subtitle_track';
   static const String _keyVideoQuality = 'video_quality';
   static const String _keyBackgroundPlay = 'background_play';
+  static const String _keyWindowsPlaybackPerformanceMode =
+      'windows_playback_performance_mode';
   static const String _keySubtitleFontSize = 'subtitle_font_size';
   static const String _keySubtitleHeight = 'subtitle_height';
   static const String _keySubtitleLetterSpacing = 'subtitle_letter_spacing';
@@ -48,6 +50,9 @@ class UserPreferences {
   static const String _keyOpenSubtitlesBaseUrl = 'opensubtitles_base_url';
   static const String _keyOpenSubtitlesLanguages = 'opensubtitles_languages';
   static const String _keyCachedSubtitles = 'cached_subtitles';
+  // Keep the original key so existing local-file selections migrate without
+  // any explicit preference rewrite.
+  static const String _xmltvFallbackSourcePrefix = 'xmltv_fallback_path.';
 
   static Future<void> setLastPlaylist(String playlistId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -62,6 +67,28 @@ class UserPreferences {
   static Future<void> removeLastPlaylist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyLastPlaylist);
+  }
+
+  static Future<String?> getXmltvFallbackSource(String playlistId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(
+      _playlistPreferenceKey(_xmltvFallbackSourcePrefix, playlistId),
+    );
+    return value == null || value.trim().isEmpty ? null : value;
+  }
+
+  static Future<void> setXmltvFallbackSource(
+    String playlistId,
+    String? source,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _playlistPreferenceKey(_xmltvFallbackSourcePrefix, playlistId);
+    final normalized = source?.trim() ?? '';
+    if (normalized.isEmpty) {
+      await prefs.remove(key);
+    } else {
+      await prefs.setString(key, normalized);
+    }
   }
 
   static Future<void> setVolume(double volume) async {
@@ -112,6 +139,16 @@ class UserPreferences {
   static Future<bool> getBackgroundPlay() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_keyBackgroundPlay) ?? true;
+  }
+
+  static Future<void> setWindowsPlaybackPerformanceMode(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyWindowsPlaybackPerformanceMode, value);
+  }
+
+  static Future<bool> getWindowsPlaybackPerformanceMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyWindowsPlaybackPerformanceMode) ?? false;
   }
 
   static Future<void> setBorderlessWindow(bool value) async {

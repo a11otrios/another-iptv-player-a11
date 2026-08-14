@@ -32,6 +32,17 @@ void main() {
     expect(result.map((item) => item.id), ['new', 'middle', 'old', 'unknown']);
   });
 
+  test('release date can sort movie years oldest first', () {
+    final result = sortCategoryItems([
+      movie('old', 'An Old Film (1988)'),
+      movie('unknown', 'A Film Without A Year'),
+      movie('new', 'A New Film 4K (2025)'),
+      movie('middle', 'A Middle Film [2014]'),
+    ], CategoryItemSort.releaseDateAscending);
+
+    expect(result.map((item) => item.id), ['old', 'middle', 'new', 'unknown']);
+  });
+
   test('equal and unknown release dates retain provider order', () {
     final result = sortCategoryItems([
       movie('first', 'First (2024)'),

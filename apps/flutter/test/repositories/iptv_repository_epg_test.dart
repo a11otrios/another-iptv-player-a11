@@ -4,13 +4,20 @@ import 'package:another_iptv_player/models/api_configuration_model.dart';
 import 'package:another_iptv_player/repositories/iptv_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   const config = ApiConfig(
     baseUrl: 'http://provider.test',
     username: 'user',
     password: 'pass',
   );
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
 
   test(
     'falls back to the simple EPG table and removes expired listings',

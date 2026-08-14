@@ -151,4 +151,35 @@ describe("server catalog filtering", () => {
       expect.objectContaining({ title: "Saved Movie", lastTimeMs: 6000 }),
     );
   });
+
+  it("stores categories in the exact desktop order", async () => {
+    const client = {
+      playlists: async () => [{
+        id: "p",
+        name: "Remote library",
+        type: "xtream" as const,
+        createdAt: new Date(2).toISOString(),
+      }],
+      categories: async (_playlistId: string, kind: string) =>
+        kind === "live"
+          ? [
+              { id: "children", name: "Children", type: "live" },
+              { id: "news", name: "News", type: "live" },
+            ]
+          : [],
+      favorites: async () => [],
+      history: async () => [],
+      preferences: async () => ({ hiddenCategories: [] }),
+    } as unknown as ServerClient;
+
+    await syncServerLibrary(client);
+
+    const categories = (await (await getDb()).getAll("categories"))
+      .filter((category) => category.kind === "live")
+      .sort((left, right) => left.sortIndex - right.sortIndex);
+    expect(categories.map((category) => category.categoryId)).toEqual([
+      "children",
+      "news",
+    ]);
+  });
 });

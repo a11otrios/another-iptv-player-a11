@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:another_iptv_player/models/player_aspect_ratio_mode.dart';
 import 'package:another_iptv_player/models/category_type.dart';
 import 'package:another_iptv_player/repositories/user_preferences.dart';
@@ -18,6 +20,27 @@ void main() {
       await UserPreferences.getPlayerAspectRatio('playlist-a/live/one'),
       PlayerAspectRatioMode.original,
     );
+  });
+
+  test('XMLTV sources retain existing file settings and accept URLs', () async {
+    final encodedPlaylistId = base64Url
+        .encode(utf8.encode('playlist-a'))
+        .replaceAll('=', '');
+    SharedPreferences.setMockInitialValues({
+      'xmltv_fallback_path.$encodedPlaylistId': r'C:\Guides\guide.xml',
+    });
+
+    expect(
+      await UserPreferences.getXmltvFallbackSource('playlist-a'),
+      r'C:\Guides\guide.xml',
+    );
+
+    const url = 'https://provider.test/epg.xml?token=secret';
+    await UserPreferences.setXmltvFallbackSource('playlist-a', url);
+    expect(await UserPreferences.getXmltvFallbackSource('playlist-a'), url);
+
+    await UserPreferences.setXmltvFallbackSource('playlist-a', null);
+    expect(await UserPreferences.getXmltvFallbackSource('playlist-a'), isNull);
   });
 
   test('player aspect ratios are persisted independently by stream', () async {
@@ -91,6 +114,13 @@ void main() {
       expect(await UserPreferences.getAlwaysOnTop(), isTrue);
     },
   );
+
+  test('Windows playback performance mode defaults off and persists', () async {
+    expect(await UserPreferences.getWindowsPlaybackPerformanceMode(), isFalse);
+
+    await UserPreferences.setWindowsPlaybackPerformanceMode(true);
+    expect(await UserPreferences.getWindowsPlaybackPerformanceMode(), isTrue);
+  });
 
   test('category order is isolated by playlist and content type', () async {
     await UserPreferences.setCategoryOrder(

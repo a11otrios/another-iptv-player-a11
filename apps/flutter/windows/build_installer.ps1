@@ -2,8 +2,8 @@
 param(
   [string]$NsisPath,
   [string]$VcRedistPath,
-  [string]$Version = "1.7.0",
-  [string]$BuildNumber = "31"
+  [string]$Version = "1.7.4",
+  [string]$BuildNumber = "32"
 )
 
 $ErrorActionPreference = "Stop"

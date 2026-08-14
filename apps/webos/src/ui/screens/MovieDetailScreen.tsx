@@ -192,8 +192,14 @@ export function MovieDetailScreen({
     let cancelled = false;
     void (async () => {
       const db = await getDb();
-      const fav = await isFavorite(db, playlist.id, "vod", String(vodId));
-      if (!cancelled) setFavorite(fav);
+      const [fav, resume] = await Promise.all([
+        isFavorite(db, playlist.id, "vod", String(vodId)),
+        getResumePositionMs(db, playlist.id, "vod", String(vodId)),
+      ]);
+      if (!cancelled) {
+        setFavorite(fav);
+        setResumeMs(resume);
+      }
     })();
     return () => {
       cancelled = true;

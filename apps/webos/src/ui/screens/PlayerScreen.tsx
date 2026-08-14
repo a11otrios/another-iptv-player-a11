@@ -13,8 +13,16 @@ import {
 } from "@noriginmedia/norigin-spatial-navigation";
 import { getDb } from "../../data/db";
 import { FavoriteKind, PlaylistRecord } from "../../data/records";
-import { isFavorite, toggleFavorite } from "../../data/favoritesRepo";
-import { getResumePositionMs, saveProgress } from "../../data/watchHistoryRepo";
+import {
+  getFavorites,
+  isFavorite,
+  toggleFavorite,
+} from "../../data/favoritesRepo";
+import {
+  chooseResumePositionMs,
+  getResumePositionMs,
+  saveProgress,
+} from "../../data/watchHistoryRepo";
 import { settings } from "../../data/settings";
 import { createPlayer } from "../../player/playerFactory";
 import { AspectMode, PlayerPort, PlayerState, TrackInfo } from "../../player/PlayerPort";
@@ -33,6 +41,7 @@ import { PlayableItem } from "../../models/playable";
 import {
   CHANNEL_SHORTCUT_PAGES,
   ChannelShortcutPage,
+  mergeChannelShortcutSources,
   nextChannelShortcutPage,
 } from "../../models/channelShortcuts";
 import { useNavigation } from "../../navigation/NavigationStack";
@@ -41,6 +50,7 @@ import {
   channelStepForKeyCode,
   KEY,
   normalizeKeyCode,
+  playerPanelForColorKey,
 } from "../../navigation/keys";
 import { t } from "../../i18n";
 import {
@@ -340,6 +350,9 @@ export function PlayerScreen({
   const shortcutPageRef = useRef<ChannelShortcutPage>("A");
   const shortcutRequestRef = useRef(0);
   const activeServerPlaybackUrlRef = useRef<string | null>(null);
+  const historyWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const historyCheckpointRef = useRef({ key: "", positionMs: 0 });
+  const latestPlaybackRef = useRef({ positionMs: 0, durationMs: 0 });
 
   const stepSeek = useCallback((dir: -1 | 1) => {
     const player = playerRef.current;
@@ -499,28 +512,39 @@ export function PlayerScreen({
     [closePanel],
   );
 
-  const flushHistory = useCallback(async () => {
+  const flushHistory = useCallback((): Promise<void> => {
     const player = playerRef.current;
     const current = itemsRef.current[indexRef.current];
-    if (!player || !current) return;
-    try {
-      const db = await getDb();
-      await saveProgress(db, {
+    if (!player || !current) return Promise.resolve();
+    // Snapshot before queueing: later channel switches replace itemsRef and
+    // reset the player timeline, but this write still belongs to the item that
+    // was current when flushHistory was requested.
+    const entry = {
         playlistId: playlist.id,
         type: current.historyType,
         streamId: current.historyStreamId,
-        lastTimeMs: player.getPositionMs(),
-        durationMs: player.getDurationMs(),
+        // Native webOS can briefly report zeroes while it processes a media
+        // event. Retain the last trustworthy event values for history writes
+        // so a valid checkpoint is not silently discarded by saveProgress.
+        lastTimeMs: player.getPositionMs() || latestPlaybackRef.current.positionMs,
+        durationMs: player.getDurationMs() || latestPlaybackRef.current.durationMs,
         lastWatchedAt: Date.now(),
         title: current.title,
         secondaryTitle: current.secondaryTitle,
         imageURL: current.imageURL,
         seriesId: current.seriesId,
         containerExtension: current.containerExtension,
-      });
-    } catch (error) {
-      console.warn("[player] could not persist watch history", error);
-    }
+    };
+    const write = async () => {
+      try {
+        await saveProgress(await getDb(), entry);
+      } catch (error) {
+        console.warn("[player] could not persist watch history", error);
+      }
+    };
+    const pending = historyWriteRef.current.then(write, write);
+    historyWriteRef.current = pending;
+    return pending;
   }, [playlist.id]);
 
   const cancelCountdown = useCallback(() => {
@@ -544,10 +568,11 @@ export function PlayerScreen({
       nextIndex: number,
       resumeOverrideMs?: number,
       modePreference?: "remux" | "transcode",
-      itemOverride?: PlayableItem,
+      queueOverride?: PlayableItem[],
     ) => {
       const player = playerRef.current;
-      const next = itemOverride ?? itemsRef.current[nextIndex];
+      const nextItems = queueOverride ?? itemsRef.current;
+      const next = nextItems[nextIndex];
       if (!player || !next) return;
       if (!modePreference) compatibilityStageRef.current = 0;
       cancelCountdown();
@@ -558,10 +583,9 @@ export function PlayerScreen({
       showControls();
       await flushHistory();
       await releaseActiveMediaSession();
-      if (itemOverride) {
-        itemsRef.current = [itemOverride];
-        setItems([itemOverride]);
-        nextIndex = 0;
+      if (queueOverride) {
+        itemsRef.current = queueOverride;
+        setItems(queueOverride);
       }
       indexRef.current = nextIndex;
       setIndex(nextIndex);
@@ -584,15 +608,15 @@ export function PlayerScreen({
       player.setAspectMode(savedAspect);
 
       const db = await getDb();
-      const resume =
-        resumeOverrideMs ??
-        next.resumeTimeMs ??
-        (await getResumePositionMs(
+      const persistedResume = await getResumePositionMs(
           db,
           playlist.id,
           next.historyType,
           next.historyStreamId,
-        ));
+        );
+      const resume =
+        resumeOverrideMs ??
+        chooseResumePositionMs(next.resumeTimeMs, persistedResume);
 
       let source = {
         url: next.url,
@@ -693,14 +717,31 @@ export function PlayerScreen({
           setTracks(player.getTracks());
         }
       }),
-      player.on("prepared", ({ durationMs: d }) => setDurationMs(d)),
+      player.on("prepared", ({ durationMs: d }) => {
+        latestPlaybackRef.current.durationMs = d;
+        setDurationMs(d);
+      }),
       player.on("timeupdate", ({ positionMs: p }) => {
+        latestPlaybackRef.current.positionMs = p;
+        const current = itemsRef.current[indexRef.current];
+        // The native webOS video element reliably emits timeupdate while the
+        // separate interval can be delayed when the TV throttles background
+        // JavaScript. Persist from the media clock itself, before the OSD
+        // early returns below, so hiding controls never disables resume.
+        if (!current?.isLive && p >= HISTORY_TICK_MS) {
+          const key = `${current.historyType}:${current.historyStreamId}`;
+          const previous = historyCheckpointRef.current;
+          if (previous.key !== key || p - previous.positionMs >= HISTORY_TICK_MS) {
+            historyCheckpointRef.current = { key, positionMs: p };
+            void flushHistory();
+          }
+        }
         // Only the seek bar consumes the clock: skip entirely while the OSD
         // is hidden, a panel covers it, or the item is live (no seek bar) —
         // otherwise the whole player tree re-rendered once per second for
         // zero visual change. showControls re-syncs the position on reveal.
         if (!controlsRef.current || panelRef.current !== "none") return;
-        if (itemsRef.current[indexRef.current]?.isLive) return;
+        if (current?.isLive) return;
         // Skip while an accumulated seek is pending (optimistic position wins)
         // and only re-render when the visible second actually changes.
         if (pendingSeekRef.current !== null) return;
@@ -756,16 +797,32 @@ export function PlayerScreen({
     document.addEventListener("visibilitychange", onVisibility);
 
     const historyTimer = window.setInterval(() => {
-      if (playerRef.current?.getState() === "playing") void flushHistory();
+      const activePlayer = playerRef.current;
+      const current = itemsRef.current[indexRef.current];
+      if (!activePlayer || !current) return;
+      // Some older LG native-video builds advance the media clock while
+      // briefly reporting a stale state. A positive VOD position is still a
+      // valid checkpoint, and prevents Back from losing the latest resume
+      // point just because the statechange event arrived late.
+      if (
+        activePlayer.getState() === "playing" ||
+        (!current.isLive && activePlayer.getPositionMs() > 0)
+      ) {
+        void flushHistory();
+      }
     }, HISTORY_TICK_MS);
 
     return () => {
+      // Snapshot while the native video is still mounted. Destroying first
+      // clears its timeline, which previously let Back discard the latest
+      // VOD position on webOS even after visible playback had advanced.
+      const finalHistory = flushHistory();
       window.clearInterval(historyTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       offs.forEach((off) => off());
       player.destroy();
       playerRef.current = null;
-      void releaseActiveMediaSession();
+      void finalHistory.finally(() => releaseActiveMediaSession());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -827,16 +884,60 @@ export function PlayerScreen({
         const shortcut = shortcutsRef.current[String(code - 48)];
         if (shortcut) {
           if (panelRef.current === "channels") closePanel();
-          const shortcutItem: PlayableItem = {
-            url: "",
-            title: shortcut.name,
-            imageURL: shortcut.imageUrl,
-            isLive: true,
-            historyType: "live",
-            historyStreamId: shortcut.itemId,
-            serverItemId: shortcut.itemId,
-          };
-          void openIndexRef.current(0, undefined, undefined, shortcutItem);
+          void (async () => {
+            let favoriteChannels: Array<{
+              itemId: string;
+              name: string;
+              imageUrl?: string;
+            }> = [];
+            try {
+              const favorites = await getFavorites(
+                await getDb(),
+                playlist.id,
+                "live",
+              );
+              favoriteChannels = favorites.map((favorite) => ({
+                itemId: favorite.itemId,
+                name: favorite.name ?? favorite.itemId,
+                imageUrl: favorite.imageURL,
+              }));
+            } catch {}
+            const currentChannels = itemsRef.current
+              .filter((entry) => entry.isLive)
+              .map((entry) => ({
+                itemId: entry.serverItemId ?? entry.historyStreamId,
+                name: entry.title,
+                imageUrl: entry.imageURL,
+              }));
+            const pageChannels = Object.values(shortcutsRef.current);
+            const merged = mergeChannelShortcutSources(
+              currentChannels,
+              favoriteChannels,
+              pageChannels,
+              [shortcut],
+            );
+            const queue: PlayableItem[] = merged.map((channel) => ({
+              url: "",
+              title: channel.name,
+              imageURL: channel.imageUrl,
+              isLive: true,
+              historyType: "live",
+              historyStreamId: channel.itemId,
+              serverItemId: channel.itemId,
+            }));
+            const target = Math.max(
+              queue.findIndex(
+                (entry) => entry.historyStreamId === shortcut.itemId,
+              ),
+              0,
+            );
+            void openIndexRef.current(
+              target,
+              undefined,
+              undefined,
+              queue,
+            );
+          })();
         }
         return;
       }
@@ -867,6 +968,7 @@ export function PlayerScreen({
       const item = items[indexRef.current];
       if (!item) return;
       if (code === KEY.Back) return;
+      const colorPanel = playerPanelForColorKey(code, item.isLive);
       // Norigin's Enter callback is unreliable after it focuses a control
       // that replaced the whole toolbar on Chromium 53. Route the retry at
       // the player level while the terminal error state is visible.
@@ -941,12 +1043,11 @@ export function PlayerScreen({
         stepSeek(-1);
       } else if (!item.isLive && code === KEY.MediaFastForward) {
         stepSeek(1);
-      } else if (code === KEY.Yellow) {
+      } else if (colorPanel === "tracks") {
         setTracks(player.getTracks());
         setPanel("tracks");
       } else if (
-        code === KEY.Blue &&
-        item.isLive &&
+        colorPanel === "channels" &&
         (items.length > 1 || playlist.managedByServer)
       ) {
         setPanel("channels");
@@ -1250,11 +1351,9 @@ export function PlayerScreen({
                 </>
               )}
               <p className="player-hints">
-                {t("player.tracks.title")}: {t("tv.key.yellow")}
+                {`${t("player.tracks.title")}: ${t("tv.key.yellow")}`}
+                {` · ${t("player.all_channels")}: ${t("tv.key.blue")}`}
                 {` · 16:9: ${t("tv.key.green")}`}
-                {showChannelsButton
-                  ? ` · ${t("player.all_channels")}: ${t("tv.key.blue")}`
-                  : ""}
               </p>
             </div>
           </div>

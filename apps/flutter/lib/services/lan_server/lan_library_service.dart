@@ -13,6 +13,7 @@ import 'package:another_iptv_player/services/watch_history_service.dart';
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:another_iptv_player/utils/radio_station_filter.dart';
+import 'package:another_iptv_player/utils/category_item_sort.dart';
 
 class LanApiException implements Exception {
   const LanApiException(this.statusCode, this.code, this.message);
@@ -340,9 +341,15 @@ class LanLibraryService {
             final categoryName =
                 categoryNames[item['categoryId']?.toString()] ?? '';
             return name.contains(normalizedQuery) ||
-                categoryName.contains(normalizedQuery);
+                (categoryId == null && categoryName.contains(normalizedQuery));
           }).toList();
     final sorted = filtered.toList();
+    _sortWireItems(sorted, sort);
+    _itemSnapshots[cacheKey] = _ItemSnapshot(now, sorted);
+    return _pageItems(sorted, offset: offset, limit: limit);
+  }
+
+  void _sortWireItems(List<Map<String, Object?>> sorted, String sort) {
     switch (sort) {
       case 'ascending':
         sorted.sort(
@@ -361,6 +368,9 @@ class LanLibraryService {
       case 'release':
         sorted.sort((a, b) => _releaseSort(b).compareTo(_releaseSort(a)));
         break;
+      case 'releaseAscending':
+        sorted.sort((a, b) => _releaseSort(a).compareTo(_releaseSort(b)));
+        break;
       case 'rating':
         sorted.sort(
           (a, b) => (double.tryParse(b['rating']?.toString() ?? '') ?? 0)
@@ -368,9 +378,16 @@ class LanLibraryService {
         );
         break;
     }
-    _itemSnapshots[cacheKey] = _ItemSnapshot(now, sorted);
-    return _pageItems(sorted, offset: offset, limit: limit);
   }
+
+  String _wireSort(CategoryItemSort sort) => switch (sort) {
+        CategoryItemSort.provider => '',
+        CategoryItemSort.nameAscending => 'ascending',
+        CategoryItemSort.nameDescending => 'descending',
+        CategoryItemSort.releaseDate => 'release',
+        CategoryItemSort.releaseDateAscending => 'releaseAscending',
+        CategoryItemSort.rating => 'rating',
+      };
 
   int _releaseSort(Map<String, Object?> item) {
     for (final key in const ['createdAt', 'lastModified']) {
@@ -398,7 +415,7 @@ class LanLibraryService {
         if (category['id'] != null) category['id'].toString(): category,
     };
     final totals = <String, int>{};
-    final samples = <String, List<Object?>>{};
+    final categoryItems = <String, List<Map<String, Object?>>>{};
     var offset = 0;
     while (true) {
       final page = await items(
@@ -415,23 +432,32 @@ class LanLibraryService {
           continue;
         }
         totals[categoryId] = (totals[categoryId] ?? 0) + 1;
-        final sample = samples.putIfAbsent(categoryId, () => <Object?>[]);
-        if (sample.length < safeLimit) sample.add(value);
+        categoryItems
+            .putIfAbsent(categoryId, () => <Map<String, Object?>>[])
+            .add(Map<String, Object?>.from(value));
       }
       if (page['hasMore'] != true || pageItems.isEmpty) break;
       offset += pageItems.length;
     }
     return visibleCategories
         .where((category) => (totals[category['id']?.toString()] ?? 0) > 0)
-        .map((category) {
+        .map((category) async {
           final id = category['id'].toString();
+          final categoryType = ContentType.toCategoryType(contentType);
+          final preference = await UserPreferences.getCategoryItemSort(
+            playlistId: playlistId,
+            type: categoryType,
+            categoryId: id,
+          );
+          final items = categoryItems[id] ?? <Map<String, Object?>>[];
+          _sortWireItems(items, _wireSort(preference));
           return <String, Object?>{
             'category': category,
-            'items': samples[id] ?? const <Object?>[],
+            'items': items.take(safeLimit).toList(),
             'total': totals[id] ?? 0,
           };
         })
-        .toList();
+        .wait;
   }
 
   Future<Map<String, Object?>?> item({

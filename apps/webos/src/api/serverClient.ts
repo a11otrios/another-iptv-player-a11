@@ -262,7 +262,7 @@ export class ServerClient {
     itemId?: string;
     categoryId?: string;
     query?: string;
-    sort?: "ascending" | "descending" | "release" | "rating";
+    sort?: "release" | "releaseAscending" | "rating";
     offset?: number;
     limit?: number;
   } = {}): Promise<ServerItemPage> {

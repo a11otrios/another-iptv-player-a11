@@ -13,6 +13,7 @@ import 'package:another_iptv_player/widgets/player-buttons/video_channel_shortcu
 import 'package:another_iptv_player/widgets/player-buttons/video_channel_selector_widget.dart';
 import 'package:another_iptv_player/widgets/player-buttons/video_favorite_widget.dart';
 import 'package:another_iptv_player/widgets/player-buttons/video_info_widget.dart';
+import 'package:another_iptv_player/widgets/player-buttons/video_epg_widget.dart';
 import 'package:another_iptv_player/widgets/player-buttons/video_settings_widget.dart';
 import 'package:another_iptv_player/widgets/player-buttons/video_title_widget.dart';
 import 'package:flutter/material.dart';
@@ -254,6 +255,15 @@ class _VideoWidgetState extends State<VideoWidget> {
               _buildAspectRatioButton(),
               VideoSettingsWidget(),
             ],
+            bottomButtonBar: const [
+              MaterialDesktopSkipPreviousButton(),
+              MaterialDesktopPlayOrPauseButton(),
+              MaterialDesktopSkipNextButton(),
+              MaterialDesktopVolumeButton(),
+              MaterialDesktopPositionIndicator(),
+              Expanded(child: VideoEpgWidget()),
+              MaterialDesktopFullscreenButton(),
+            ],
           ),
           fullscreen: MaterialDesktopVideoControlsThemeData().copyWith(
             modifyVolumeOnScroll: false,
@@ -271,6 +281,15 @@ class _VideoWidgetState extends State<VideoWidget> {
               VideoFavoriteWidget(),
               _buildAspectRatioButton(),
               VideoSettingsWidget(),
+            ],
+            bottomButtonBar: const [
+              MaterialDesktopSkipPreviousButton(),
+              MaterialDesktopPlayOrPauseButton(),
+              MaterialDesktopSkipNextButton(),
+              MaterialDesktopVolumeButton(),
+              MaterialDesktopPositionIndicator(),
+              Expanded(child: VideoEpgWidget()),
+              MaterialDesktopFullscreenButton(),
             ],
           ),
           child: Scaffold(

@@ -23,8 +23,10 @@ import { centerInContainer } from "../utils/scroll";
 import { KEY, normalizeKeyCode } from "../../navigation/keys";
 import { ServerClient } from "../../api/serverClient";
 import { serverItemToRecord } from "../../data/serverCatalog";
+import { SearchPill } from "../components/SearchPill";
 
 const PAGE_SIZE = 60;
+const SEARCH_DEBOUNCE_MS = 300;
 // Fixed 1920 canvas: 5 × 320px cards per grid row (see app.css row math).
 const GRID_COLS = 5;
 // Rows above/below the focused one whose cards stay focusable. Cards outside
@@ -76,13 +78,24 @@ export function CategoryGridScreen({
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const loadingMore = useRef(false);
+  const requestVersionRef = useRef(0);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [sortMode, setSortMode] = useState<"ascending" | "descending" | "release" | "rating" | null>(null);
+  const [sortMode, setSortMode] = useState<"rating" | "release" | "releaseAscending" | null>(null);
   const [focusedRow, setFocusedRow] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
   const { ref, focusKey, focusSelf } = useFocusable({ trackChildren: true });
 
   const urls = useMemo(() => new PlaybackUrlBuilder(playlist), [playlist]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedQuery(searchQuery),
+      SEARCH_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   const makeServerGridItems = useCallback((records: (LiveStreamRecord | VodStreamRecord | SeriesRecord)[]): GridItem[] => {
     if (kind === "live") {
@@ -112,15 +125,21 @@ export function CategoryGridScreen({
 
   useEffect(() => {
     let cancelled = false;
+    const requestVersion = ++requestVersionRef.current;
     void (async () => {
       if (playlist.managedByServer && kind !== "m3uGroup") {
         setLoaded(false);
         const page = await ServerClient.connected()?.items(playlist.id, kind, {
           categoryId,
+          query: debouncedQuery.trim() || undefined,
           sort: sortMode ?? undefined,
           limit: PAGE_SIZE,
         });
-        if (!page || cancelled) return;
+        if (
+          !page ||
+          cancelled ||
+          requestVersion !== requestVersionRef.current
+        ) return;
         setItems(makeServerGridItems(page.items.map(serverItemToRecord)));
         setTotalCount(page.total);
         setHasMore(page.hasMore);
@@ -199,7 +218,7 @@ export function CategoryGridScreen({
             push({ name: "player", playlist, items: queue, startIndex: index }),
         }));
       }
-      if (!cancelled) {
+      if (!cancelled && requestVersion === requestVersionRef.current) {
         setItems(loaded);
         setTotalCount(loaded.length);
         setLoaded(true);
@@ -208,36 +227,58 @@ export function CategoryGridScreen({
     return () => {
       cancelled = true;
     };
-  }, [playlist, kind, categoryId, urls, push, makeServerGridItems, sortMode]);
+  }, [playlist, kind, categoryId, urls, push, makeServerGridItems, sortMode, debouncedQuery]);
 
   const loadMore = useCallback(() => {
     if (!playlist.managedByServer || kind === "m3uGroup" || !hasMore || loadingMore.current) return;
     const client = ServerClient.connected();
     if (!client) return;
+    const requestVersion = requestVersionRef.current;
     loadingMore.current = true;
     void client.items(playlist.id, kind, {
       categoryId,
+      query: debouncedQuery.trim() || undefined,
       sort: sortMode ?? undefined,
       offset: items.length,
       limit: PAGE_SIZE,
     }).then((page) => {
+      if (requestVersion !== requestVersionRef.current) return;
       setItems((current) => current.concat(makeServerGridItems(page.items.map(serverItemToRecord))));
       setTotalCount(page.total);
       setHasMore(page.hasMore);
     }).finally(() => { loadingMore.current = false; });
-  }, [playlist, kind, categoryId, items.length, hasMore, makeServerGridItems, sortMode]);
+  }, [playlist, kind, categoryId, items.length, hasMore, makeServerGridItems, sortMode, debouncedQuery]);
 
   const screenActive = useScreenActive();
   useEffect(() => {
     // Never while covered: focusSelf would steal focus from the top screen.
-    if (screenActive && items.length > 0) focusSelf();
+    if (
+      screenActive &&
+      items.length > 0 &&
+      document.activeElement?.tagName !== "INPUT"
+    ) {
+      focusSelf();
+    }
   }, [items.length, focusSelf, screenActive]);
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    setFocusedRow(0);
+  }, [debouncedQuery]);
 
   useEffect(() => {
     if (!screenActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (normalizeKeyCode(event) !== KEY.Green) return;
-      setSortMode((current) => current === null ? "ascending" : current === "ascending" ? "descending" : current === "descending" ? "release" : current === "release" ? "rating" : null);
+      setSortMode((current) =>
+        current === null
+          ? "rating"
+          : current === "rating"
+            ? "release"
+            : current === "release"
+              ? "releaseAscending"
+              : null,
+      );
       setVisibleCount(PAGE_SIZE);
       setFocusedRow(0);
     };
@@ -247,14 +288,28 @@ export function CategoryGridScreen({
 
   const shape = kind === "vod" || kind === "series" ? "poster" : "landscape";
   const displayItems = useMemo(() => {
-    const sorted = items.slice();
-    if (sortMode === "ascending") sorted.sort((a, b) => a.title.localeCompare(b.title));
-    if (sortMode === "descending") sorted.sort((a, b) => b.title.localeCompare(a.title));
+    const normalizedQuery = debouncedQuery.trim().toLowerCase();
+    const sorted = normalizedQuery
+      ? items.filter((item) => item.title.toLowerCase().includes(normalizedQuery))
+      : items.slice();
     if (sortMode === "release") sorted.sort((a, b) => (b.releaseSort ?? 0) - (a.releaseSort ?? 0));
+    if (sortMode === "releaseAscending") sorted.sort((a, b) => (a.releaseSort ?? 0) - (b.releaseSort ?? 0));
     if (sortMode === "rating") sorted.sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
     return sorted;
-  }, [items, sortMode]);
+  }, [items, sortMode, debouncedQuery]);
   const visible = displayItems.slice(0, visibleCount);
+  const displayedTotal = debouncedQuery.trim()
+    ? playlist.managedByServer
+      ? totalCount
+      : displayItems.length
+    : totalCount || items.length;
+  const searchPlaceholder = kind === "live"
+    ? t("live.search_placeholder")
+    : kind === "vod"
+      ? t("vod.search_placeholder")
+      : kind === "series"
+        ? t("series.search_placeholder")
+        : t("m3u.search_placeholder");
 
   // Incremental reveal (extend near the loaded end) + focus-window tracking.
   // Stable callback: FocusableCard is memoized, an inline handler would
@@ -280,12 +335,19 @@ export function CategoryGridScreen({
   return (
     <FocusContext.Provider value={focusKey}>
       <div ref={ref} className="screen grid-screen">
-        <h1 className="screen-title">
-          {title}
-          <span className="grid-count"> · {totalCount || items.length}</span>
-          {sortMode && <span className="grid-count"> · {sortMode}</span>}
-        </h1>
-        {loaded && items.length === 0 && (
+        <div className="grid-header">
+          <h1 className="screen-title">
+            {title}
+            <span className="grid-count"> · {displayedTotal}</span>
+            {sortMode && <span className="grid-count"> · {sortMode === "rating" ? "User rating ↓" : sortMode === "release" ? "Release date (newest first)" : "Release date (oldest first)"}</span>}
+          </h1>
+          <SearchPill
+            value={searchQuery}
+            placeholder={searchPlaceholder}
+            onChange={setSearchQuery}
+          />
+        </div>
+        {loaded && displayItems.length === 0 && (
           <p className="screen-hint">
             {kind === "vod"
               ? t("vod.empty.no_movie")
@@ -303,6 +365,7 @@ export function CategoryGridScreen({
                   title={item.title}
                   imageURL={item.imageURL}
                   shape={shape}
+                  rating={item.rating}
                   onSelect={item.onSelect}
                   onFocusedElement={onCardFocused}
                   preloadImage

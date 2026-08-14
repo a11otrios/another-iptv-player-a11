@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHANNEL_SHORTCUT_PAGES,
+  mergeChannelShortcutSources,
   nextChannelShortcutPage,
 } from "../src/models/channelShortcuts";
 
@@ -12,5 +13,18 @@ describe("channel shortcut pages", () => {
     expect(nextChannelShortcutPage("D")).toBe("F");
     expect(nextChannelShortcutPage("F")).toBe("G");
     expect(nextChannelShortcutPage("G")).toBe("A");
+  });
+
+  it("combines category, favorite, and shortcut channels without duplicates", () => {
+    expect(
+      mergeChannelShortcutSources(
+        [{ itemId: "category", name: "Category channel" }],
+        [
+          { itemId: "favorite", name: "Favorite channel" },
+          { itemId: "category", name: "Duplicate" },
+        ],
+        [{ itemId: "shortcut", name: "Shortcut channel" }],
+      ).map((item) => item.itemId),
+    ).toEqual(["category", "favorite", "shortcut"]);
   });
 });

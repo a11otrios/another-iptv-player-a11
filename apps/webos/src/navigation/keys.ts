@@ -36,6 +36,17 @@ export function channelStepForKeyCode(code: number): -1 | 0 | 1 {
   return 0;
 }
 
+export function playerPanelForColorKey(
+  code: number,
+  _isLive: boolean,
+): "tracks" | "channels" | null {
+  // Keep colour keys consistent regardless of the playing media type:
+  // Yellow opens track/subtitle settings and Blue opens the channel list.
+  if (code === KEY.Yellow) return "tracks";
+  if (code === KEY.Blue) return "channels";
+  return null;
+}
+
 export function registerTVKeys(): void {
   // webOS delivers remote keys as regular keydown events; no registration API.
 }

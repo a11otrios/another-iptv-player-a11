@@ -7,7 +7,6 @@ import '../controllers/category_detail_controller.dart';
 import '../widgets/category_detail/category_app_bar.dart';
 import '../widgets/category_detail/content_states.dart';
 import '../widgets/category_detail/content_grid.dart';
-import '../utils/category_item_sort.dart';
 
 class CategoryDetailScreen extends StatelessWidget {
   final CategoryViewModel category;
@@ -56,7 +55,8 @@ class _CategoryDetailViewState extends State<_CategoryDetailView> {
                   _searchController.clear();
                 },
                 onSearchChanged: controller.searchContent,
-                onSortPressed: () => _showSortOptions(controller),
+                selectedSort: controller.sort,
+                onSortSelected: controller.sortItems,
               ),
             ],
             body: _buildBody(controller),
@@ -118,64 +118,6 @@ class _CategoryDetailViewState extends State<_CategoryDetailView> {
           ),
         ],
       ),
-    );
-  }
-
-  void _showSortOptions(CategoryDetailController controller) {
-    showModalBottomSheet(
-      context: context,
-      builder: (_) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.restore),
-                title: const Text('Provider order'),
-                selected: controller.sort == CategoryItemSort.provider,
-                onTap: () {
-                  controller.sortItems(CategoryItemSort.provider);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('A → Z'),
-                selected: controller.sort == CategoryItemSort.nameAscending,
-                onTap: () {
-                  controller.sortItems(CategoryItemSort.nameAscending);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Z → A'),
-                selected: controller.sort == CategoryItemSort.nameDescending,
-                onTap: () {
-                  controller.sortItems(CategoryItemSort.nameDescending);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.event),
-                title: Text(context.loc.release_date),
-                selected: controller.sort == CategoryItemSort.releaseDate,
-                onTap: () {
-                  controller.sortItems(CategoryItemSort.releaseDate);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.star_rate),
-                title: Text(context.loc.rating),
-                selected: controller.sort == CategoryItemSort.rating,
-                onTap: () {
-                  controller.sortItems(CategoryItemSort.rating);
-                  Navigator.pop(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 
