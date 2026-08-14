@@ -28,6 +28,7 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
   final Map<CategoryType, List<String>> _originalOrder = {};
   bool _hideRadioStations = false;
   bool _hasChanges = false;
+  String _categoryFilter = '';
 
   @override
   void initState() {
@@ -104,23 +105,65 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
     await _saveHiddenCategories();
   }
 
-  Future<void> _setAllCategoriesVisible(
-    CategoryType type,
-    Iterable<String> ids,
-    bool visible,
-  ) async {
+  Future<void> _setFilteredCategoriesVisible(bool visible) async {
+    final matches = _matchingCategories().toList();
+    if (matches.isEmpty) return;
+
     setState(() {
       _hasChanges = true;
-      final keys = ids.map((id) => UserPreferences.hiddenCategoryKey(type, id));
       if (visible) {
-        _hiddenCategories
-          ..removeAll(keys)
-          ..removeAll(ids);
+        for (final match in matches) {
+          _hiddenCategories
+            ..remove(
+              UserPreferences.hiddenCategoryKey(match.type, match.categoryId),
+            )
+            ..remove(match.categoryId);
+        }
       } else {
-        _hiddenCategories.addAll(keys);
+        _hiddenCategories.addAll(
+          matches.map(
+            (match) =>
+                UserPreferences.hiddenCategoryKey(match.type, match.categoryId),
+          ),
+        );
       }
     });
     await _saveHiddenCategories();
+  }
+
+  Iterable<({CategoryType type, String categoryId})>
+  _matchingCategories() sync* {
+    for (final entry in _categories.entries) {
+      for (final category in entry.value) {
+        if (_matchesFilter(category)) {
+          yield (type: entry.key, categoryId: category.category.categoryId);
+        }
+      }
+    }
+  }
+
+  bool _matchesFilter(CategoryViewModel category) {
+    final query = _categoryFilter.trim().toLowerCase();
+    return query.isEmpty ||
+        category.category.categoryName.toLowerCase().contains(query);
+  }
+
+  bool _isCategoryVisible(CategoryType type, String categoryId) {
+    final key = UserPreferences.hiddenCategoryKey(type, categoryId);
+    return !_hiddenCategories.contains(key) &&
+        !_hiddenCategories.contains(categoryId);
+  }
+
+  bool? _filteredCategoriesVisibility(
+    List<({CategoryType type, String categoryId})> matches,
+  ) {
+    if (matches.isEmpty) return null;
+    final visibleCount = matches
+        .where((match) => _isCategoryVisible(match.type, match.categoryId))
+        .length;
+    if (visibleCount == 0) return false;
+    if (visibleCount == matches.length) return true;
+    return null;
   }
 
   Future<void> _saveHiddenCategories() async {
@@ -130,14 +173,14 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
     );
   }
 
-  Future<void> _moveCategory(CategoryType type, int index, int offset) async {
+  Future<void> _swapCategories(CategoryType type, int index, int target) async {
     final categories = _categories[type]!;
-    final target = index + offset;
     if (target < 0 || target >= categories.length) return;
     setState(() {
       _hasChanges = true;
-      final category = categories.removeAt(index);
-      categories.insert(target, category);
+      final category = categories[index];
+      categories[index] = categories[target];
+      categories[target] = category;
     });
     await _saveCategoryOrder(type);
   }
@@ -200,6 +243,7 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
         ),
         body: ListView(
           children: [
+            _buildCategoryFilter(context),
             SwitchListTile(
               secondary: const Icon(Icons.radio),
               title: Text(context.loc.hide_radio_stations),
@@ -230,13 +274,61 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
     );
   }
 
+  Widget _buildCategoryFilter(BuildContext context) {
+    final matches = _matchingCategories().toList();
+    final visibility = _filteredCategoriesVisibility(matches);
+    final bulkActionLabel = visibility == true
+        ? context.loc.deselect_all
+        : context.loc.select_all;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const ValueKey('category-filter-field'),
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                labelText: context.loc.search,
+                prefixIcon: const Icon(Icons.search),
+              ),
+              onChanged: (value) {
+                setState(() {
+                  _categoryFilter = value;
+                });
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: bulkActionLabel,
+            child: Checkbox(
+              key: const ValueKey('filtered-category-toggle'),
+              tristate: true,
+              value: visibility,
+              semanticLabel: bulkActionLabel,
+              onChanged: matches.isEmpty
+                  ? null
+                  : (_) => _setFilteredCategoriesVisible(visibility != true),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCategoryGroup(
     BuildContext context, {
     required String title,
     required CategoryType type,
     required List<CategoryViewModel> categories,
   }) {
-    if (categories.isEmpty) {
+    final filteredCategories = <({int index, CategoryViewModel category})>[
+      for (final entry in categories.indexed)
+        if (_matchesFilter(entry.$2)) (index: entry.$1, category: entry.$2),
+    ];
+    if (filteredCategories.isEmpty) {
       return const SizedBox.shrink();
     }
 
@@ -245,35 +337,12 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
       children: [
         const Divider(height: 1),
         ListTile(title: Text(title), tileColor: Colors.black12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton(
-              onPressed: () => _setAllCategoriesVisible(
-                type,
-                categories.map((c) => c.category.categoryId),
-                true,
-              ),
-              child: Text(context.loc.select_all),
-            ),
-            TextButton(
-              onPressed: () => _setAllCategoriesVisible(
-                type,
-                categories.map((c) => c.category.categoryId),
-                false,
-              ),
-              child: Text(context.loc.deselect_all),
-            ),
-          ],
-        ),
-        ...categories.indexed.map((entry) {
-          final index = entry.$1;
-          final category = entry.$2;
+        ...filteredCategories.indexed.map((entry) {
+          final filteredIndex = entry.$1;
+          final index = entry.$2.index;
+          final category = entry.$2.category;
           final categoryId = category.category.categoryId;
-          final key = UserPreferences.hiddenCategoryKey(type, categoryId);
-          final isHidden =
-              _hiddenCategories.contains(key) ||
-              _hiddenCategories.contains(categoryId);
+          final isHidden = !_isCategoryVisible(type, categoryId);
           final widgets = WidgetsLocalizations.of(context);
           final originalIndex = _originalOrder[type]?.indexOf(categoryId) ?? -1;
           return ListTile(
@@ -295,16 +364,24 @@ class _CategorySettingsScreenState extends State<CategorySettingsScreen> {
                 IconButton(
                   tooltip: widgets.reorderItemUp,
                   icon: const Icon(Icons.keyboard_arrow_up),
-                  onPressed: index == 0
+                  onPressed: filteredIndex == 0
                       ? null
-                      : () => _moveCategory(type, index, -1),
+                      : () => _swapCategories(
+                          type,
+                          index,
+                          filteredCategories[filteredIndex - 1].index,
+                        ),
                 ),
                 IconButton(
                   tooltip: widgets.reorderItemDown,
                   icon: const Icon(Icons.keyboard_arrow_down),
-                  onPressed: index == categories.length - 1
+                  onPressed: filteredIndex == filteredCategories.length - 1
                       ? null
-                      : () => _moveCategory(type, index, 1),
+                      : () => _swapCategories(
+                          type,
+                          index,
+                          filteredCategories[filteredIndex + 1].index,
+                        ),
                 ),
                 IconButton(
                   tooltip: context.loc.restore_original_position,
