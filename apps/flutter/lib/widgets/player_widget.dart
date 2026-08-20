@@ -10,6 +10,7 @@ import 'package:another_iptv_player/services/event_bus.dart';
 import 'package:another_iptv_player/services/open_subtitles_service.dart';
 import 'package:another_iptv_player/services/watch_history_service.dart';
 import 'package:another_iptv_player/utils/get_playlist_type.dart';
+import 'package:another_iptv_player/utils/live_stream_buffering.dart';
 import 'package:another_iptv_player/utils/subtitle_configuration.dart';
 import 'package:another_iptv_player/utils/windows_playback_performance.dart';
 import 'package:another_iptv_player/widgets/video_widget.dart';
@@ -239,6 +240,9 @@ class _PlayerWidgetState extends State<PlayerWidget>
     PlayerState.backgroundPlay = await UserPreferences.getBackgroundPlay();
     _audioHandler.setPlayer(_player);
     _videoController = VideoController(_player);
+    if (contentItem.contentType == ContentType.liveStream) {
+      await _enableLiveStreamBuffering();
+    }
     if (Platform.isWindows &&
         await UserPreferences.getWindowsPlaybackPerformanceMode()) {
       await _enableWindowsPlaybackPerformanceMode();
@@ -595,6 +599,37 @@ class _PlayerWidgetState extends State<PlayerWidget>
     }
 
     await _loadCachedSubtitleForCurrentContent();
+  }
+
+  /// Enlarge mpv's demuxer cache for live streams so high-bitrate channels do
+  /// not stall when the provider connection briefly slows down. Best-effort:
+  /// unsupported platforms simply keep the default buffer.
+  Future<void> _enableLiveStreamBuffering() async {
+    final platform = _player.platform;
+    if (platform == null) return;
+
+    // Respect a per-item User-Agent (m3u playlists can carry one); otherwise
+    // fall back to a broadly whitelisted UA so providers do not throttle us.
+    final itemUserAgent = contentItem.m3uItem?.userAgent;
+    final userAgent = (itemUserAgent != null && itemUserAgent.isNotEmpty)
+        ? itemUserAgent
+        : liveStreamDefaultUserAgent;
+
+    final properties = <String, String>{
+      ...liveStreamBufferingMpvProperties,
+      'user-agent': userAgent,
+    };
+
+    for (final property in properties.entries) {
+      try {
+        await (platform as dynamic).setProperty(property.key, property.value);
+      } catch (error) {
+        debugPrint(
+          'Could not apply live stream buffering property '
+          '${property.key}: $error',
+        );
+      }
+    }
   }
 
   Future<void> _enableWindowsPlaybackPerformanceMode() async {
