@@ -37,6 +37,108 @@ void main() {
     );
   });
 
+  test('keeps remux output stream-copy and preserves full source quality', () {
+    final args = buildLanMediaArguments(
+      source: const LanPlaybackDescriptor(
+        url: 'https://example.test/movie.mkv',
+        mimeType: 'video/x-matroska',
+        isLive: false,
+      ),
+      transcode: false,
+      segmentPath: 'segment_%06d.ts',
+      playlistPath: 'index.m3u8',
+    );
+
+    expect(args, containsAllInOrder(['-c', 'copy']));
+    expect(args, isNot(contains('-vf')));
+  });
+
+  test('caps compatibility transcodes at 1080p with a webOS-safe level', () {
+    final args = buildLanMediaArguments(
+      source: const LanPlaybackDescriptor(
+        url: 'https://example.test/movie-4k.mkv',
+        mimeType: 'video/x-matroska',
+        isLive: false,
+      ),
+      transcode: true,
+      segmentPath: 'segment_%06d.ts',
+      playlistPath: 'index.m3u8',
+    );
+    final filterIndex = args.indexOf('-vf');
+    final levelIndex = args.indexOf('-level');
+
+    expect(filterIndex, greaterThanOrEqualTo(0));
+    expect(args[filterIndex + 1], contains('min(1920,iw)'));
+    expect(args[filterIndex + 1], contains('min(1080,ih)'));
+    expect(args[levelIndex + 1], '4.2');
+  });
+
+  test('seeks the proxied VOD input to the selected resume point', () {
+    final args = buildLanMediaArguments(
+      source: const LanPlaybackDescriptor(
+        url: 'https://example.test/movie-4k.mkv',
+        mimeType: 'video/x-matroska',
+        isLive: false,
+        startPositionMs: 564191,
+      ),
+      transcode: true,
+      segmentPath: 'segment_%06d.ts',
+      playlistPath: 'index.m3u8',
+    );
+
+    expect(
+      args,
+      containsAllInOrder([
+        '-ss',
+        '564.191',
+        '-i',
+        'https://example.test/movie-4k.mkv',
+      ]),
+    );
+  });
+
+  test('never applies a saved position to a live input', () {
+    final args = buildLanMediaArguments(
+      source: const LanPlaybackDescriptor(
+        url: 'https://example.test/live.ts',
+        mimeType: 'video/mp2t',
+        isLive: true,
+        startPositionMs: 564191,
+      ),
+      transcode: true,
+      segmentPath: 'segment_%06d.ts',
+      playlistPath: 'index.m3u8',
+    );
+
+    expect(args, isNot(contains('-ss')));
+  });
+
+  test('allows large VOD compatibility streams longer to initialise', () {
+    const vod = LanPlaybackDescriptor(
+      url: 'https://example.test/movie-4k.mkv',
+      mimeType: 'video/x-matroska',
+      isLive: false,
+    );
+    const live = LanPlaybackDescriptor(
+      url: 'https://example.test/live.ts',
+      mimeType: 'video/mp2t',
+      isLive: true,
+    );
+
+    expect(
+      lanMediaStartupTimeout(source: vod, transcode: false),
+      const Duration(seconds: 30),
+    );
+    expect(
+      lanMediaStartupTimeout(source: vod, transcode: true),
+      const Duration(seconds: 45),
+    );
+    expect(
+      lanMediaStartupTimeout(source: live, transcode: true),
+      const Duration(seconds: 15),
+    );
+  });
+
   test(
     'reports a clear compatibility error when FFmpeg is unavailable',
     () async {

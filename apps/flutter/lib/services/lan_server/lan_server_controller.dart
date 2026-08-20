@@ -99,6 +99,9 @@ class LanServerController extends ChangeNotifier {
     _httpClient = null;
     _discoverySocket?.close();
     _discoverySocket = null;
+    for (final ticket in _streamTickets.values) {
+      ticket.close();
+    }
     _streamTickets.clear();
     _subtitleTickets.clear();
     await _mediaPipeline.dispose();
@@ -549,17 +552,51 @@ class LanServerController extends ChangeNotifier {
       }
       if (path == '/api/v1/playback' && request.method == 'POST') {
         final body = await _readJson(request);
-        final descriptor = await library.playback(
+        final storedDescriptor = await library.playback(
           playlistId: _requiredString(body, 'playlistId'),
           contentType: contentTypeFromWire(_requiredString(body, 'type')),
           itemId: _requiredString(body, 'itemId'),
           episodeId: _optionalString(body['episodeId']),
         );
+        final requestedStartPositionMs = body.containsKey('startPositionMs')
+            ? _int(body['startPositionMs'])
+            : null;
+        final descriptor = requestedStartPositionMs == null
+            ? storedDescriptor
+            : LanPlaybackDescriptor(
+                url: storedDescriptor.url,
+                mimeType: storedDescriptor.mimeType,
+                isLive: storedDescriptor.isLive,
+                headers: storedDescriptor.headers,
+                startPositionMs: requestedStartPositionMs < 0
+                    ? 0
+                    : requestedStartPositionMs,
+              );
         final modePreference = _string(body['modePreference']);
         if (modePreference == 'remux' || modePreference == 'transcode') {
+          // Keep provider access behind a desktop-only ticket. FFmpeg can open
+          // overlapping Range requests while probing Matroska files; the
+          // ticket serializes those onto the provider's single connection.
+          final inputExpiresAt = DateTime.now().toUtc().add(
+            const Duration(minutes: 30),
+          );
+          final inputTicket = _createStreamTicket(
+            descriptor,
+            token,
+            inputExpiresAt,
+            singleUpstreamConnection: true,
+          );
+          final inputPathSuffix = _mediaPathSuffix(descriptor.url);
+          final pipelineSource = LanPlaybackDescriptor(
+            url:
+                '${_requestOrigin(request)}/api/v1/stream/${inputTicket.id}$inputPathSuffix?access_token=${Uri.encodeQueryComponent(inputTicket.accessGrant)}',
+            mimeType: descriptor.mimeType,
+            isLive: descriptor.isLive,
+            startPositionMs: descriptor.startPositionMs,
+          );
           final accessGrant = _newGrant();
           final session = await _mediaPipeline.start(
-            source: descriptor,
+            source: pipelineSource,
             deviceToken: token,
             accessGrant: accessGrant,
             transcode: modePreference == 'transcode',
@@ -581,8 +618,9 @@ class LanServerController extends ChangeNotifier {
         // Playback URLs can embed Xtream credentials or provider tokens. Keep
         // them desktop-side even if an older client asks for direct playback.
         final ticket = _createStreamTicket(descriptor, token, expiresAt);
+        final pathSuffix = _mediaPathSuffix(descriptor.url);
         final url =
-            '${_requestOrigin(request)}/api/v1/stream/${ticket.id}?access_token=${Uri.encodeQueryComponent(ticket.accessGrant)}';
+            '${_requestOrigin(request)}/api/v1/stream/${ticket.id}$pathSuffix?access_token=${Uri.encodeQueryComponent(ticket.accessGrant)}';
         final mode = descriptor.mimeType == 'application/vnd.apple.mpegurl'
             ? 'hls'
             : 'proxy';
@@ -617,8 +655,9 @@ class LanServerController extends ChangeNotifier {
     }
   }
 
-  Future<void> _proxyStream(HttpRequest incoming, String ticketId) async {
+  Future<void> _proxyStream(HttpRequest incoming, String ticketPath) async {
     _pruneTickets();
+    final ticketId = ticketPath.split('.').first;
     final ticket = _streamTickets[ticketId];
     final accessGrant = _requestToken(incoming);
     if (ticket == null ||
@@ -637,7 +676,7 @@ class LanServerController extends ChangeNotifier {
         'The paired device is no longer authorized',
       );
     }
-    final client = _httpClient;
+    final client = ticket.upstreamClient ?? _httpClient;
     if (client == null) {
       throw const LanApiException(
         503,
@@ -645,49 +684,131 @@ class LanServerController extends ChangeNotifier {
         'Stream proxy is unavailable',
       );
     }
-    final upstream = await client.getUrl(Uri.parse(ticket.descriptor.url));
-    ticket.descriptor.headers.forEach(upstream.headers.set);
-    final range = incoming.headers.value(HttpHeaders.rangeHeader);
-    if (range != null) upstream.headers.set(HttpHeaders.rangeHeader, range);
-    upstream.followRedirects = true;
-    upstream.maxRedirects = 5;
-    final response = await upstream.close();
-    final contentType = response.headers.contentType?.mimeType ?? '';
-    final isHls =
-        contentType.contains('mpegurl') ||
-        ticket.descriptor.mimeType == 'application/vnd.apple.mpegurl' ||
-        Uri.parse(ticket.descriptor.url).path.toLowerCase().endsWith('.m3u8');
-    if (isHls && response.statusCode >= 200 && response.statusCode < 300) {
-      final manifest = await utf8.decoder.bind(response).join();
-      final rewritten = _rewriteHlsManifest(
-        manifest,
-        Uri.parse(ticket.descriptor.url),
-        ticket,
-        requestOrigin: _requestOrigin(incoming),
+    final serializesUpstream = ticket.upstreamClient != null;
+    Completer<void>? requestDone;
+    int? requestGeneration;
+    if (serializesUpstream) {
+      requestGeneration = ++ticket.latestUpstreamRequest;
+      final previousRequest = ticket.upstreamTail;
+      requestDone = Completer<void>();
+      ticket.upstreamTail = requestDone.future;
+      final cancelPreviousStream = ticket.cancelActiveUpstream;
+      ticket.activeUpstreamRequest?.abort();
+      if (cancelPreviousStream != null) await cancelPreviousStream();
+      await previousRequest;
+      if (requestGeneration != ticket.latestUpstreamRequest) {
+        requestDone.complete();
+        return;
+      }
+    }
+
+    HttpClientRequest? upstream;
+    Future<void> Function()? cancelUpstream;
+    try {
+      upstream = await client.getUrl(Uri.parse(ticket.descriptor.url));
+      if (serializesUpstream) {
+        if (requestGeneration != ticket.latestUpstreamRequest) {
+          upstream.abort();
+          return;
+        }
+        ticket.activeUpstreamRequest = upstream;
+      }
+      ticket.descriptor.headers.forEach(upstream.headers.set);
+      final range = incoming.headers.value(HttpHeaders.rangeHeader);
+      if (range != null) upstream.headers.set(HttpHeaders.rangeHeader, range);
+      upstream.followRedirects = true;
+      upstream.maxRedirects = 5;
+      if (serializesUpstream) upstream.persistentConnection = false;
+      final response = await upstream.close();
+      final contentType = response.headers.contentType?.mimeType ?? '';
+      final isHls =
+          contentType.contains('mpegurl') ||
+          ticket.descriptor.mimeType == 'application/vnd.apple.mpegurl' ||
+          Uri.parse(ticket.descriptor.url).path.toLowerCase().endsWith('.m3u8');
+      if (isHls && response.statusCode >= 200 && response.statusCode < 300) {
+        final manifest = await utf8.decoder.bind(response).join();
+        final rewritten = _rewriteHlsManifest(
+          manifest,
+          Uri.parse(ticket.descriptor.url),
+          ticket,
+          requestOrigin: _requestOrigin(incoming),
+        );
+        incoming.response
+          ..statusCode = response.statusCode
+          ..headers.contentType = ContentType(
+            'application',
+            'vnd.apple.mpegurl',
+            charset: 'utf-8',
+          )
+          ..write(rewritten);
+        await incoming.response.close();
+        return;
+      }
+      incoming.response.statusCode = response.statusCode;
+      for (final header in const [
+        HttpHeaders.contentTypeHeader,
+        HttpHeaders.contentLengthHeader,
+        HttpHeaders.contentRangeHeader,
+        HttpHeaders.acceptRangesHeader,
+        HttpHeaders.cacheControlHeader,
+      ]) {
+        final value = response.headers.value(header);
+        if (value != null) incoming.response.headers.set(header, value);
+      }
+      final streamDone = Completer<void>();
+      late final StreamSubscription<List<int>> subscription;
+      subscription = response.listen(
+        incoming.response.add,
+        onError: (Object error, StackTrace stackTrace) {
+          if (!streamDone.isCompleted) {
+            streamDone.completeError(error, stackTrace);
+          }
+        },
+        onDone: () {
+          if (!streamDone.isCompleted) streamDone.complete();
+        },
+        cancelOnError: true,
       );
-      incoming.response
-        ..statusCode = response.statusCode
-        ..headers.contentType = ContentType(
-          'application',
-          'vnd.apple.mpegurl',
-          charset: 'utf-8',
-        )
-        ..write(rewritten);
+      cancelUpstream = () async {
+        if (streamDone.isCompleted) return;
+        await subscription.cancel();
+        if (!streamDone.isCompleted) streamDone.complete();
+      };
+      if (serializesUpstream) {
+        ticket.cancelActiveUpstream = cancelUpstream;
+      }
+      unawaited(
+        incoming.response.done.then<void>(
+          (_) async {
+            if (!streamDone.isCompleted) await cancelUpstream!();
+          },
+          onError: (Object _, StackTrace __) async {
+            if (!streamDone.isCompleted) await cancelUpstream!();
+          },
+        ),
+      );
+      await streamDone.future;
+      if (serializesUpstream &&
+          requestGeneration != ticket.latestUpstreamRequest) {
+        return;
+      }
       await incoming.response.close();
-      return;
+    } catch (_) {
+      if (!serializesUpstream ||
+          requestGeneration == ticket.latestUpstreamRequest) {
+        rethrow;
+      }
+    } finally {
+      if (identical(ticket.activeUpstreamRequest, upstream)) {
+        ticket.activeUpstreamRequest = null;
+      }
+      if (identical(ticket.cancelActiveUpstream, cancelUpstream)) {
+        ticket.cancelActiveUpstream = null;
+      }
+      if (requestDone != null && !requestDone.isCompleted) {
+        requestDone.complete();
+      }
     }
-    incoming.response.statusCode = response.statusCode;
-    for (final header in const [
-      HttpHeaders.contentTypeHeader,
-      HttpHeaders.contentLengthHeader,
-      HttpHeaders.contentRangeHeader,
-      HttpHeaders.acceptRangesHeader,
-      HttpHeaders.cacheControlHeader,
-    ]) {
-      final value = response.headers.value(header);
-      if (value != null) incoming.response.headers.set(header, value);
-    }
-    await response.pipe(incoming.response);
   }
 
   Future<void> _serveMediaFile(HttpRequest request, String path) async {
@@ -820,15 +941,22 @@ class LanServerController extends ChangeNotifier {
   ({String id, String accessGrant}) _createStreamTicket(
     LanPlaybackDescriptor descriptor,
     String deviceToken,
-    DateTime expiresAt,
-  ) {
+    DateTime expiresAt, {
+    bool singleUpstreamConnection = false,
+  }) {
     final id = _newGrant();
     final accessGrant = _newGrant();
+    final upstreamClient = singleUpstreamConnection
+        ? (HttpClient()
+            ..connectionTimeout = const Duration(seconds: 20)
+            ..maxConnectionsPerHost = 1)
+        : null;
     _streamTickets[id] = _StreamTicket(
       descriptor: descriptor,
       deviceToken: deviceToken,
       accessGrant: accessGrant,
       expiresAt: expiresAt,
+      upstreamClient: upstreamClient,
     );
     return (id: id, accessGrant: accessGrant);
   }
@@ -878,23 +1006,49 @@ class LanServerController extends ChangeNotifier {
 
   void _pruneTickets() {
     final now = DateTime.now();
-    _streamTickets.removeWhere((_, ticket) => now.isAfter(ticket.expiresAt));
+    _streamTickets.removeWhere((_, ticket) {
+      final expired = now.isAfter(ticket.expiresAt);
+      if (expired) ticket.close();
+      return expired;
+    });
     _subtitleTickets.removeWhere((_, ticket) => now.isAfter(ticket.expiresAt));
   }
 }
 
+String _mediaPathSuffix(String sourceUrl) {
+  final segments = Uri.tryParse(sourceUrl)?.pathSegments ?? const <String>[];
+  if (segments.isEmpty) return '';
+  final fileName = segments.last;
+  final dot = fileName.lastIndexOf('.');
+  if (dot < 0 || dot == fileName.length - 1) return '';
+  final extension = fileName.substring(dot + 1).toLowerCase();
+  return RegExp(r'^[a-z0-9]{1,8}$').hasMatch(extension) ? '.$extension' : '';
+}
+
 class _StreamTicket {
-  const _StreamTicket({
+  _StreamTicket({
     required this.descriptor,
     required this.deviceToken,
     required this.accessGrant,
     required this.expiresAt,
+    this.upstreamClient,
   });
 
   final LanPlaybackDescriptor descriptor;
   final String deviceToken;
   final String accessGrant;
   final DateTime expiresAt;
+  final HttpClient? upstreamClient;
+  int latestUpstreamRequest = 0;
+  Future<void> upstreamTail = Future<void>.value();
+  HttpClientRequest? activeUpstreamRequest;
+  Future<void> Function()? cancelActiveUpstream;
+
+  void close() {
+    activeUpstreamRequest?.abort();
+    unawaited(cancelActiveUpstream?.call());
+    upstreamClient?.close(force: true);
+  }
 }
 
 class _SubtitleTicket {

@@ -9,6 +9,7 @@ import 'package:another_iptv_player/models/m3u_item.dart';
 import 'package:another_iptv_player/models/playlist_model.dart';
 import 'package:another_iptv_player/models/series.dart';
 import 'package:another_iptv_player/models/subtitle_search_result.dart';
+import 'package:another_iptv_player/models/vod_streams.dart';
 import 'package:another_iptv_player/services/lan_server/lan_server_controller.dart';
 import 'package:another_iptv_player/services/open_subtitles_service.dart';
 import 'package:another_iptv_player/services/service_locator.dart';
@@ -115,6 +116,19 @@ segment.ts
         seriesId: 'series-1',
         name: 'Test Series',
         lastModified: '1767225600',
+      ),
+    ]);
+    await database.insertVodStreams([
+      VodStream(
+        streamId: 'movie-4k',
+        name: 'Test 4K Movie',
+        streamIcon: '',
+        categoryId: 'movies-4k',
+        rating: '',
+        rating5based: 0,
+        containerExtension: 'mkv',
+        playlistId: 'xtream-playlist',
+        createdAt: DateTime.utc(2026),
       ),
     ]);
     await database.insertCategories([
@@ -367,6 +381,25 @@ segment.ts
       );
       expect(mediaResponse.statusCode, HttpStatus.ok);
       expect(mediaBytes, const [0x47, 0x40, 0x00, 0x10]);
+
+      final moviePlayback = await _request(
+        client,
+        baseUri.resolve('playback'),
+        method: 'POST',
+        token: token,
+        body: {
+          'playlistId': 'xtream-playlist',
+          'type': 'vod',
+          'itemId': 'movie-4k',
+          'startPositionMs': 564191,
+        },
+      );
+      final movieDescriptor = moviePlayback.body['data'] as Map;
+      expect(movieDescriptor['mode'], 'proxy');
+      expect(movieDescriptor['startPositionMs'], 564191);
+      final moviePlaybackUri = Uri.parse(movieDescriptor['url'] as String);
+      expect(moviePlaybackUri.path, endsWith('.mkv'));
+      expect(movieDescriptor['url'], isNot(contains('test-password')));
 
       final legacyDirectRequest = await _request(
         client,

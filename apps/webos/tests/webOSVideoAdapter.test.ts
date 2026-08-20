@@ -40,7 +40,8 @@ class FakeVideo extends EventTarget {
   playsInline = false;
   paused = true;
   seeking = false;
-  currentTime = 0;
+  private playbackTime = 0;
+  blockBackwardSeek = false;
   duration = Number.NaN;
   readyState = 0;
   error: { code: number } | null = null;
@@ -52,6 +53,15 @@ class FakeVideo extends EventTarget {
   playCalls = 0;
   removed = false;
   playResult: Promise<void>;
+
+  get currentTime(): number { return this.playbackTime; }
+  set currentTime(value: number) {
+    if (this.blockBackwardSeek && value < this.playbackTime) {
+      this.seeking = true;
+      return;
+    }
+    this.playbackTime = value;
+  }
 
   constructor() {
     super();
@@ -260,6 +270,46 @@ describe("WebOSVideoAdapter", () => {
     });
     expect(restored.currentTime).toBe(37);
     expect(restored.playCalls).toBe(1);
+  });
+
+  it("recreates the native element at the target when a backward seek wedges", async () => {
+    const adapter = new WebOSVideoAdapter();
+    adapter.mount(new FakeContainer() as unknown as HTMLElement);
+    await adapter.open({ url: "http://desktop/family/vod", isLive: false });
+    const stuck = currentVideo();
+    stuck.duration = 120;
+    stuck.currentTime = 80;
+    stuck.dispatchEvent(new Event("playing"));
+    stuck.blockBackwardSeek = true;
+
+    await adapter.seekTo(50_000);
+    expect(currentVideo()).toBe(stuck);
+
+    await vi.advanceTimersByTimeAsync(4000);
+    const recovered = currentVideo();
+    expect(recovered).not.toBe(stuck);
+    recovered.duration = 120;
+    recovered.dispatchEvent(new Event("loadedmetadata"));
+
+    expect(recovered.currentTime).toBe(50);
+    expect(recovered.playCalls).toBe(1);
+  });
+
+  it("keeps the native element when a backward seek completes normally", async () => {
+    const adapter = new WebOSVideoAdapter();
+    adapter.mount(new FakeContainer() as unknown as HTMLElement);
+    await adapter.open({ url: "http://desktop/family/vod", isLive: false });
+    const video = currentVideo();
+    video.duration = 120;
+    video.currentTime = 80;
+    video.dispatchEvent(new Event("playing"));
+
+    await adapter.seekTo(50_000);
+    video.dispatchEvent(new Event("seeked"));
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(currentVideo()).toBe(video);
+    expect(video.currentTime).toBe(50);
   });
 
   it("replaces a frozen element twice, then emits a terminal stall error", async () => {

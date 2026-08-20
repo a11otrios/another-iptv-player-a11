@@ -5,8 +5,10 @@ import { ServerClient } from "../src/api/serverClient";
 import { getDb, resetDbForTests } from "../src/data/db";
 import {
   chooseResumePositionMs,
+  getResumePositionMs,
   saveProgress,
 } from "../src/data/watchHistoryRepo";
+import { mediaDurationMs } from "../src/models/playable";
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -56,5 +58,47 @@ describe("resume position selection", () => {
     expect(await db.get("watchHistory", "p_vod_movie")).toEqual(
       expect.objectContaining({ lastTimeMs: 35_000 }),
     );
+  });
+
+  it("keeps a resumable VOD position when LG reports an unknown duration", async () => {
+    const db = await getDb();
+    await db.put("playlists", {
+      id: "p",
+      name: "Managed",
+      type: "xtream",
+      serverURL: "",
+      username: "",
+      password: "",
+      filterAdultContent: false,
+      createdAt: 1,
+      managedByServer: true,
+    });
+    const putHistory = vi.fn(async () => undefined);
+    vi.spyOn(ServerClient, "connected").mockReturnValue({
+      putHistory,
+    } as unknown as ServerClient);
+
+    await saveProgress(db, {
+      playlistId: "p",
+      type: "vod",
+      streamId: "movie",
+      lastTimeMs: 35_000,
+      durationMs: 0,
+      lastWatchedAt: 2,
+      title: "Movie",
+    });
+
+    expect(await getResumePositionMs(db, "p", "vod", "movie")).toBe(35_000);
+    expect(putHistory).toHaveBeenCalledWith(
+      "p",
+      "vod",
+      "movie",
+      expect.objectContaining({ positionMs: 35_000, durationMs: 0 }),
+    );
+  });
+
+  it("uses provider runtime text before a less reliable seconds field", () => {
+    expect(mediaDurationMs("01:30:00", 42)).toBe(5_400_000);
+    expect(mediaDurationMs(undefined, 90)).toBe(90_000);
   });
 });

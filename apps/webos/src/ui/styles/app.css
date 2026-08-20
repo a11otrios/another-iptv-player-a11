@@ -856,6 +856,59 @@
   max-width: 980px;
 }
 
+.detail-history {
+  width: 650px;
+  margin-top: 22px;
+  padding: 15px 18px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(9, 12, 18, 0.58);
+}
+
+.detail-history-header,
+.detail-history-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.detail-history-title {
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.detail-history-time {
+  margin-left: 24px;
+  font-size: 20px;
+  color: #e8ebf2;
+}
+
+.detail-history-progress {
+  height: 7px;
+  margin-top: 11px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+
+.detail-history-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: #4c8dff;
+}
+
+.detail-history-meta {
+  margin-top: 9px;
+  font-size: 17px;
+  color: var(--text-faint);
+}
+
+.detail-history-meta span + span {
+  margin-left: 24px;
+}
+
 .detail-key-hint {
   margin-top: 20px;
   font-size: 20px;

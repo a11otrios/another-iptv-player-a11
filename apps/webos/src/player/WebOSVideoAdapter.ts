@@ -15,6 +15,8 @@ export class WebOSVideoAdapter implements PlayerPort {
   private static readonly STALL_POLL_MS = 3000;
   private static readonly STALL_TICKS_BEFORE_RELOAD = 4;
   private static readonly MAX_STALL_RELOADS = 2;
+  private static readonly SEEK_RECOVERY_MS = 4000;
+  private static readonly SEEK_TOLERANCE_SECONDS = 2;
 
   private readonly events = new PlayerEventEmitter();
   private container: HTMLElement | null = null;
@@ -30,6 +32,11 @@ export class WebOSVideoAdapter implements PlayerPort {
   private stallReloads = 0;
   private subtitleOffsetMs = 0;
   private playbackEpoch = 0;
+  private seekRecoveryTimer: number | undefined;
+  private pendingSeek: {
+    video: HTMLVideoElement;
+    listener: EventListener;
+  } | null = null;
   private readonly observedTextTracks = new WeakSet<TextTrack>();
 
   mount(container: HTMLElement): void {
@@ -75,7 +82,55 @@ export class WebOSVideoAdapter implements PlayerPort {
   }
 
   async seekTo(positionMs: number): Promise<void> {
-    if (this.video) this.video.currentTime = Math.max(positionMs, 0) / 1000;
+    const video = this.video;
+    const source = this.source;
+    if (!video || !source || source.isLive) return;
+
+    const durationSeconds = isFinite(video.duration) ? video.duration : 0;
+    const targetSeconds = durationSeconds > 0
+      ? Math.min(Math.max(positionMs / 1000, 0), Math.max(durationSeconds - 1, 0))
+      : Math.max(positionMs, 0) / 1000;
+    const previousSeconds = video.currentTime;
+    const wasPlaying = !video.paused;
+
+    this.clearSeekRecovery();
+
+    // Forward seeks complete reliably on the B8's native media surface. A
+    // backward seek can remain in `seeking` forever, and the general stall
+    // watchdog intentionally ignores that state. Give the native pipeline a
+    // chance first, then recreate it at the requested position if it wedges.
+    if (targetSeconds < previousSeconds) {
+      const recoverIfNeeded = (requireProgress: boolean) => {
+        if (video !== this.video || source !== this.source) {
+          this.clearSeekRecovery();
+          return;
+        }
+        const currentSeconds = video.currentTime;
+        const landed =
+          !video.seeking &&
+          currentSeconds >= targetSeconds - WebOSVideoAdapter.SEEK_TOLERANCE_SECONDS &&
+          currentSeconds < previousSeconds &&
+          (!requireProgress || !wasPlaying || currentSeconds > targetSeconds + 0.25);
+        this.clearSeekRecovery();
+        if (!landed) {
+          void this.reloadAfterSeek(targetSeconds * 1000, wasPlaying);
+        }
+      };
+      const onSeeked: EventListener = () => recoverIfNeeded(false);
+      video.addEventListener("seeked", onSeeked);
+      this.pendingSeek = { video, listener: onSeeked };
+      this.seekRecoveryTimer = window.setTimeout(
+        () => recoverIfNeeded(true),
+        WebOSVideoAdapter.SEEK_RECOVERY_MS,
+      );
+    }
+
+    try {
+      video.currentTime = targetSeconds;
+    } catch {
+      this.clearSeekRecovery();
+      await this.reloadAfterSeek(targetSeconds * 1000, wasPlaying);
+    }
   }
 
   getPositionMs(): number { return this.video ? Math.floor(this.video.currentTime * 1000) : 0; }
@@ -190,6 +245,7 @@ export class WebOSVideoAdapter implements PlayerPort {
   }
 
   private releaseVideo(): void {
+    this.clearSeekRecovery();
     const old = this.video;
     if (!old) return;
     old.pause();
@@ -302,6 +358,44 @@ export class WebOSVideoAdapter implements PlayerPort {
         this.events.emit("error", { message: "LG media pipeline reload failed" });
       }
     }
+  }
+
+  private async reloadAfterSeek(positionMs: number, shouldPlay: boolean): Promise<void> {
+    const source = this.source;
+    if (!source || !this.container) return;
+    const epoch = ++this.playbackEpoch;
+    this.clearSeekRecovery();
+    this.stopStallWatchdog();
+    this.resumePositionMs = positionMs;
+    this.replaceVideo();
+    const video = this.video!;
+    this.attachSource(video, source);
+    video.load();
+    if (!shouldPlay) return;
+    this.events.emit("buffering", { done: false });
+    this.setState("preparing");
+    try {
+      await video.play();
+    } catch {
+      if (epoch === this.playbackEpoch && video === this.video) {
+        this.setState("idle");
+        this.events.emit("error", { message: "LG media seek recovery failed" });
+      }
+    }
+  }
+
+  private clearSeekRecovery(): void {
+    if (this.seekRecoveryTimer !== undefined) {
+      window.clearTimeout(this.seekRecoveryTimer);
+    }
+    this.seekRecoveryTimer = undefined;
+    if (this.pendingSeek) {
+      this.pendingSeek.video.removeEventListener(
+        "seeked",
+        this.pendingSeek.listener,
+      );
+    }
+    this.pendingSeek = null;
   }
 
   private emitTrackChange(): void {

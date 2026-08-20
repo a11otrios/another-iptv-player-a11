@@ -21,6 +21,7 @@ import {
 import {
   chooseResumePositionMs,
   getResumePositionMs,
+  resolveHistoryPositionMs,
   saveProgress,
 } from "../../data/watchHistoryRepo";
 import { settings } from "../../data/settings";
@@ -32,6 +33,11 @@ import {
   rememberTrackSelection,
 } from "../../player/trackPreferences";
 import { sanitizeSubtitleText } from "../../player/subtitleText";
+import {
+  hasPlaybackAdvanced,
+  nextCompatibilityFallback,
+  preferredInitialCompatibilityMode,
+} from "../../player/compatibilityFallback";
 import {
   IDLE_SEEK_STREAK,
   nextSeekStep,
@@ -70,6 +76,7 @@ import { getAspectMode, nextAspectMode, setAspectMode as saveAspectMode } from "
 
 const CONTROLS_HIDE_MS = 5000;
 const HISTORY_TICK_MS = 5000;
+const PLAYER_STARTUP_TIMEOUT_MS = 20_000;
 const AUTO_ADVANCE_SECONDS = 10;
 const SEEK_COMMIT_DELAY_MS = 450;
 
@@ -345,6 +352,10 @@ export function PlayerScreen({
   const lastShownSecond = useRef(-1);
   const prefsAppliedRef = useRef(false);
   const compatibilityStageRef = useRef(0);
+  const startupTimerRef = useRef<number | undefined>(undefined);
+  const startupBaselineRef = useRef(0);
+  const playbackTimelineOffsetRef = useRef(0);
+  const requestedStartPositionRef = useRef<number | undefined>(undefined);
   const shortcutsRef = useRef<Record<string, { itemId: string; name: string; imageUrl?: string }>>({});
   const [shortcutPage, setShortcutPage] = useState<ChannelShortcutPage>("A");
   const shortcutPageRef = useRef<ChannelShortcutPage>("A");
@@ -353,23 +364,35 @@ export function PlayerScreen({
   const historyWriteRef = useRef<Promise<void>>(Promise.resolve());
   const historyCheckpointRef = useRef({ key: "", positionMs: 0 });
   const latestPlaybackRef = useRef({ positionMs: 0, durationMs: 0 });
+  const hasReliablePositionRef = useRef(false);
 
   const stepSeek = useCallback((dir: -1 | 1) => {
     const player = playerRef.current;
     if (!player) return;
     const step = nextSeekStep(seekStreakRef.current, dir, Date.now());
     seekStreakRef.current = step.streak;
-    const duration = player.getDurationMs();
-    const base = pendingSeekRef.current ?? player.getPositionMs();
+    const current = itemsRef.current[indexRef.current];
+    const duration =
+      player.getDurationMs() ||
+      latestPlaybackRef.current.durationMs ||
+      current?.durationMs ||
+      0;
+    const timelineOffset = playbackTimelineOffsetRef.current;
+    const base =
+      pendingSeekRef.current ?? player.getPositionMs() + timelineOffset;
     let target = Math.max(base + step.deltaMs, 0);
     if (duration > 0) target = Math.min(target, duration - 1000);
     pendingSeekRef.current = target;
+    latestPlaybackRef.current.positionMs = target;
+    hasReliablePositionRef.current = true;
     setPositionMs(target); // optimistic timeline feedback
     window.clearTimeout(seekCommitTimer.current);
     seekCommitTimer.current = window.setTimeout(() => {
       const commit = pendingSeekRef.current;
       pendingSeekRef.current = null;
-      if (commit !== null) void player.seekTo(commit);
+      if (commit !== null) {
+        void player.seekTo(Math.max(commit - playbackTimelineOffsetRef.current, 0));
+      }
     }, SEEK_COMMIT_DELAY_MS);
   }, []);
 
@@ -383,7 +406,7 @@ export function PlayerScreen({
     // them) — re-sync on reveal so the seek bar never flashes a stale time.
     const player = playerRef.current;
     if (player && pendingSeekRef.current === null) {
-      const p = player.getPositionMs();
+      const p = player.getPositionMs() + playbackTimelineOffsetRef.current;
       lastShownSecond.current = Math.floor(p / 1000);
       setPositionMs(p);
     }
@@ -516,6 +539,12 @@ export function PlayerScreen({
     const player = playerRef.current;
     const current = itemsRef.current[indexRef.current];
     if (!player || !current) return Promise.resolve();
+    const lastTimeMs = resolveHistoryPositionMs(
+      player.getPositionMs() + playbackTimelineOffsetRef.current,
+      latestPlaybackRef.current.positionMs,
+      hasReliablePositionRef.current,
+    );
+    if (!current.isLive && lastTimeMs < 5000) return Promise.resolve();
     // Snapshot before queueing: later channel switches replace itemsRef and
     // reset the player timeline, but this write still belongs to the item that
     // was current when flushHistory was requested.
@@ -526,8 +555,12 @@ export function PlayerScreen({
         // Native webOS can briefly report zeroes while it processes a media
         // event. Retain the last trustworthy event values for history writes
         // so a valid checkpoint is not silently discarded by saveProgress.
-        lastTimeMs: player.getPositionMs() || latestPlaybackRef.current.positionMs,
-        durationMs: player.getDurationMs() || latestPlaybackRef.current.durationMs,
+        lastTimeMs,
+        durationMs:
+          player.getDurationMs() ||
+          latestPlaybackRef.current.durationMs ||
+          current.durationMs ||
+          0,
         lastWatchedAt: Date.now(),
         title: current.title,
         secondaryTitle: current.secondaryTitle,
@@ -574,7 +607,19 @@ export function PlayerScreen({
       const nextItems = queueOverride ?? itemsRef.current;
       const next = nextItems[nextIndex];
       if (!player || !next) return;
-      if (!modePreference) compatibilityStageRef.current = 0;
+      const compatibilityMode =
+        modePreference ??
+        preferredInitialCompatibilityMode({
+          managedByServer: playlist.managedByServer === true,
+          isLive: next.isLive,
+          containerExtension: next.containerExtension,
+          userAgent: navigator.userAgent,
+        }) ??
+        undefined;
+      window.clearTimeout(startupTimerRef.current);
+      if (!modePreference) {
+        compatibilityStageRef.current = compatibilityMode === "remux" ? 1 : 0;
+      }
       cancelCountdown();
       // BEFORE the timeline resets below: showControls re-syncs positionMs
       // from the still-loaded OLD stream — called later it would overwrite
@@ -583,6 +628,14 @@ export function PlayerScreen({
       showControls();
       await flushHistory();
       await releaseActiveMediaSession();
+      if (compatibilityMode) {
+        // Detach the failed direct/remux source before FFmpeg opens the same
+        // provider URL. Some providers reject that overlapping second input
+        // with a 5XX, leaving a ready fallback unable to reach the TV.
+        player.stop();
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 750));
+      }
+      playbackTimelineOffsetRef.current = 0;
       if (queueOverride) {
         itemsRef.current = queueOverride;
         setItems(queueOverride);
@@ -597,7 +650,16 @@ export function PlayerScreen({
       setExternalSubtitleLoaded(false);
       setSubtitleOffsetMs(0);
       setPositionMs(0);
-      setDurationMs(0);
+      setDurationMs(next.durationMs ?? 0);
+      latestPlaybackRef.current = {
+        positionMs: 0,
+        durationMs: next.durationMs ?? 0,
+      };
+      hasReliablePositionRef.current = false;
+      historyCheckpointRef.current = {
+        key: `${next.historyType}:${next.historyStreamId}`,
+        positionMs: 0,
+      };
       pendingSeekRef.current = null;
       lastShownSecond.current = -1;
       prefsAppliedRef.current = false;
@@ -614,9 +676,13 @@ export function PlayerScreen({
           next.historyType,
           next.historyStreamId,
         );
-      const resume =
-        resumeOverrideMs ??
-        chooseResumePositionMs(next.resumeTimeMs, persistedResume);
+      const resume = modePreference
+        ? requestedStartPositionRef.current ??
+          resumeOverrideMs ??
+          chooseResumePositionMs(next.resumeTimeMs, persistedResume)
+        : resumeOverrideMs ??
+          chooseResumePositionMs(next.resumeTimeMs, persistedResume);
+      if (!modePreference) requestedStartPositionRef.current = resume;
 
       let source = {
         url: next.url,
@@ -637,12 +703,25 @@ export function PlayerScreen({
             next.historyType,
             next.serverItemId ?? next.historyStreamId,
             next.serverEpisodeId,
-            modePreference,
+            compatibilityMode,
+            resume,
           );
+          const effectiveStartPositionMs =
+            resume ?? descriptor.startPositionMs ?? 0;
+          requestedStartPositionRef.current = effectiveStartPositionMs;
+          const compatibilityTimeline =
+            compatibilityMode !== undefined && !descriptor.isLive;
+          playbackTimelineOffsetRef.current = compatibilityTimeline
+            ? effectiveStartPositionMs
+            : 0;
           source = {
             url: descriptor.url,
             isLive: descriptor.isLive,
-            startPositionMs: resume ?? descriptor.startPositionMs,
+            // Desktop compatibility HLS starts at zero because FFmpeg has
+            // already applied the requested content offset.
+            startPositionMs: compatibilityTimeline
+              ? 0
+              : effectiveStartPositionMs,
             headers: undefined,
             mimeType: descriptor.mimeType,
           };
@@ -656,10 +735,14 @@ export function PlayerScreen({
             }).catch(() => {});
           }
         } catch (reason) {
-          if (modePreference === "remux") {
+          if (compatibilityMode === "remux") {
             compatibilityStageRef.current = 2;
             setError(t("tv.playback.transcoding"));
-            void openIndexRef.current(nextIndex, resumeOverrideMs, "transcode");
+            void openIndexRef.current(
+              nextIndex,
+              requestedStartPositionRef.current,
+              "transcode",
+            );
             return;
           }
           setError(
@@ -672,7 +755,48 @@ export function PlayerScreen({
       }
 
       try {
-        await player.open(source);
+        // Chromium 53 can leave HTMLMediaElement.play() pending forever while
+        // the native surface reports NO_SOURCE without an error. Start the
+        // watchdog before awaiting open so that silent native startup failures
+        // can still advance through the managed compatibility modes.
+        startupBaselineRef.current = source.startPositionMs ?? 0;
+        if (playbackTimelineOffsetRef.current > 0) {
+          const timelinePosition = playbackTimelineOffsetRef.current;
+          latestPlaybackRef.current.positionMs = timelinePosition;
+          setPositionMs(timelinePosition);
+          lastShownSecond.current = Math.floor(timelinePosition / 1000);
+        }
+        const openPromise = player.open(source);
+        startupTimerRef.current = window.setTimeout(() => {
+          const activePlayer = playerRef.current;
+          if (
+            !activePlayer ||
+            indexRef.current !== nextIndex ||
+            hasPlaybackAdvanced(
+              startupBaselineRef.current,
+              activePlayer.getPositionMs(),
+            )
+          ) return;
+          const fallback = playlist.managedByServer
+            ? nextCompatibilityFallback(compatibilityStageRef.current)
+            : null;
+          if (!fallback) {
+            setError("LG media startup timed out");
+            return;
+          }
+          compatibilityStageRef.current = fallback.stage;
+          setError(
+            fallback.mode === "remux"
+              ? t("tv.playback.compatibility")
+              : t("tv.playback.transcoding"),
+          );
+          void openIndexRef.current(
+            nextIndex,
+            requestedStartPositionRef.current,
+            fallback.mode,
+          );
+        }, PLAYER_STARTUP_TIMEOUT_MS);
+        await openPromise;
         if (playlist.managedByServer && !next.isLive) {
           const server = ServerClient.connected();
           const cached = await server?.cachedSubtitle(subtitleIdentity(playlist, next));
@@ -718,21 +842,39 @@ export function PlayerScreen({
         }
       }),
       player.on("prepared", ({ durationMs: d }) => {
-        latestPlaybackRef.current.durationMs = d;
-        setDurationMs(d);
+        const current = itemsRef.current[indexRef.current];
+        const timelineDuration =
+          d > 0 ? d + playbackTimelineOffsetRef.current : 0;
+        const effectiveDuration = Math.max(
+          timelineDuration,
+          current?.durationMs ?? 0,
+        );
+        latestPlaybackRef.current.durationMs = effectiveDuration;
+        setDurationMs(effectiveDuration);
       }),
       player.on("timeupdate", ({ positionMs: p }) => {
-        latestPlaybackRef.current.positionMs = p;
+        if (hasPlaybackAdvanced(startupBaselineRef.current, p)) {
+          window.clearTimeout(startupTimerRef.current);
+        }
+        const timelinePosition = p + playbackTimelineOffsetRef.current;
+        latestPlaybackRef.current.positionMs = timelinePosition;
+        hasReliablePositionRef.current = true;
         const current = itemsRef.current[indexRef.current];
         // The native webOS video element reliably emits timeupdate while the
         // separate interval can be delayed when the TV throttles background
         // JavaScript. Persist from the media clock itself, before the OSD
         // early returns below, so hiding controls never disables resume.
-        if (!current?.isLive && p >= HISTORY_TICK_MS) {
+        if (!current?.isLive && timelinePosition >= HISTORY_TICK_MS) {
           const key = `${current.historyType}:${current.historyStreamId}`;
           const previous = historyCheckpointRef.current;
-          if (previous.key !== key || p - previous.positionMs >= HISTORY_TICK_MS) {
-            historyCheckpointRef.current = { key, positionMs: p };
+          if (
+            previous.key !== key ||
+            timelinePosition - previous.positionMs >= HISTORY_TICK_MS
+          ) {
+            historyCheckpointRef.current = {
+              key,
+              positionMs: timelinePosition,
+            };
             void flushHistory();
           }
         }
@@ -745,22 +887,29 @@ export function PlayerScreen({
         // Skip while an accumulated seek is pending (optimistic position wins)
         // and only re-render when the visible second actually changes.
         if (pendingSeekRef.current !== null) return;
-        const second = Math.floor(p / 1000);
+        const second = Math.floor(timelinePosition / 1000);
         if (second === lastShownSecond.current) return;
         lastShownSecond.current = second;
-        setPositionMs(p);
+        setPositionMs(timelinePosition);
       }),
       player.on("buffering", ({ done }) => setBuffering(!done)),
       player.on("error", ({ message }) => {
-        if (playlist.managedByServer && compatibilityStageRef.current < 2) {
-          compatibilityStageRef.current += 1;
-          const mode = compatibilityStageRef.current === 1 ? "remux" : "transcode";
+        window.clearTimeout(startupTimerRef.current);
+        const fallback = playlist.managedByServer
+          ? nextCompatibilityFallback(compatibilityStageRef.current)
+          : null;
+        if (fallback) {
+          compatibilityStageRef.current = fallback.stage;
           setError(
-            mode === "remux"
+            fallback.mode === "remux"
               ? t("tv.playback.compatibility")
               : t("tv.playback.transcoding"),
           );
-          void openIndexRef.current(indexRef.current, undefined, mode);
+          void openIndexRef.current(
+            indexRef.current,
+            requestedStartPositionRef.current,
+            fallback.mode,
+          );
           return;
         }
         setError(message);
@@ -806,7 +955,8 @@ export function PlayerScreen({
       // point just because the statechange event arrived late.
       if (
         activePlayer.getState() === "playing" ||
-        (!current.isLive && activePlayer.getPositionMs() > 0)
+        (!current.isLive &&
+          activePlayer.getPositionMs() + playbackTimelineOffsetRef.current > 0)
       ) {
         void flushHistory();
       }
@@ -817,6 +967,7 @@ export function PlayerScreen({
       // clears its timeline, which previously let Back discard the latest
       // VOD position on webOS even after visible playback had advanced.
       const finalHistory = flushHistory();
+      window.clearTimeout(startupTimerRef.current);
       window.clearInterval(historyTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       offs.forEach((off) => off());

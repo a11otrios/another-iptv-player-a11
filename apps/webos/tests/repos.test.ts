@@ -168,7 +168,7 @@ describe("watchHistoryRepo", () => {
   it("applies iOS progress rules", async () => {
     const db = await getDb();
 
-    // vod without duration → dropped
+    // A valid VOD position survives when old LG firmware omits duration.
     await saveProgress(db, {
       playlistId: PID,
       type: "vod",
@@ -178,7 +178,7 @@ describe("watchHistoryRepo", () => {
       lastWatchedAt: 1,
       title: "No duration",
     });
-    expect(await getRecentHistory(db, PID)).toEqual([]);
+    expect(await getResumePositionMs(db, PID, "vod", "1")).toBe(30_000);
 
     // live → stored with zeroed progress
     await saveProgress(db, {

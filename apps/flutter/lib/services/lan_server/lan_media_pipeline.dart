@@ -46,57 +46,12 @@ class LanMediaPipeline {
     final playlistPath = '${directory.path}${Platform.pathSeparator}index.m3u8';
     final segmentPath =
         '${directory.path}${Platform.pathSeparator}segment_%06d.ts';
-    final args = <String>[
-      '-hide_banner',
-      '-loglevel',
-      'warning',
-      if (source.headers.isNotEmpty) ...[
-        '-headers',
-        '${source.headers.entries.map((entry) => '${entry.key}: ${entry.value}').join('\r\n')}\r\n',
-      ],
-      '-i',
-      source.url,
-      '-map',
-      '0:v:0?',
-      '-map',
-      '0:a:0?',
-      if (transcode) ...[
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-crf',
-        '23',
-        '-pix_fmt',
-        'yuv420p',
-        '-profile:v',
-        'high',
-        '-level',
-        '4.1',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '160k',
-        '-ac',
-        '2',
-      ] else ...[
-        '-c',
-        'copy',
-      ],
-      '-f',
-      'hls',
-      '-hls_time',
-      '4',
-      '-hls_list_size',
-      source.isLive ? '8' : '0',
-      '-hls_flags',
-      source.isLive
-          ? 'delete_segments+append_list+independent_segments'
-          : 'independent_segments',
-      '-hls_segment_filename',
-      segmentPath,
-      playlistPath,
-    ];
+    final args = buildLanMediaArguments(
+      source: source,
+      transcode: transcode,
+      segmentPath: segmentPath,
+      playlistPath: playlistPath,
+    );
 
     Process process;
     try {
@@ -136,7 +91,9 @@ class LanMediaPipeline {
     _sessions[id] = session;
     unawaited(process.exitCode.then((_) => session.finished = true));
 
-    final deadline = DateTime.now().add(const Duration(seconds: 15));
+    final deadline = DateTime.now().add(
+      lanMediaStartupTimeout(source: source, transcode: transcode),
+    );
     final playlist = File(playlistPath);
     while (!await playlist.exists()) {
       if (session.finished || DateTime.now().isAfter(deadline)) {
@@ -201,6 +158,81 @@ class LanMediaPipeline {
       await stop(id);
     }
   }
+}
+
+List<String> buildLanMediaArguments({
+  required LanPlaybackDescriptor source,
+  required bool transcode,
+  required String segmentPath,
+  required String playlistPath,
+}) {
+  return <String>[
+    '-hide_banner',
+    '-loglevel',
+    'warning',
+    if (source.headers.isNotEmpty) ...[
+      '-headers',
+      '${source.headers.entries.map((entry) => '${entry.key}: ${entry.value}').join('\r\n')}\r\n',
+    ],
+    // The desktop LAN proxy normalizes provider Range requests. Input seeking
+    // can therefore jump to a VOD resume point without reading from zero.
+    if (!source.isLive && source.startPositionMs > 0) ...[
+      '-ss',
+      (source.startPositionMs / 1000).toStringAsFixed(3),
+    ],
+    '-i',
+    source.url,
+    '-map',
+    '0:v:0?',
+    '-map',
+    '0:a:0?',
+    if (transcode) ...[
+      '-c:v',
+      'libx264',
+      '-preset',
+      'veryfast',
+      '-crf',
+      '23',
+      '-vf',
+      "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+      '-pix_fmt',
+      'yuv420p',
+      '-profile:v',
+      'high',
+      '-level',
+      '4.2',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '160k',
+      '-ac',
+      '2',
+    ] else ...[
+      '-c',
+      'copy',
+    ],
+    '-f',
+    'hls',
+    '-hls_time',
+    '4',
+    '-hls_list_size',
+    source.isLive ? '8' : '0',
+    '-hls_flags',
+    source.isLive
+        ? 'delete_segments+append_list+independent_segments'
+        : 'independent_segments',
+    '-hls_segment_filename',
+    segmentPath,
+    playlistPath,
+  ];
+}
+
+Duration lanMediaStartupTimeout({
+  required LanPlaybackDescriptor source,
+  required bool transcode,
+}) {
+  if (source.isLive) return const Duration(seconds: 15);
+  return Duration(seconds: transcode ? 45 : 30);
 }
 
 String resolveFfmpegExecutable({

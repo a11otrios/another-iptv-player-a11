@@ -8,18 +8,19 @@ import {
   PlaylistRecord,
   VodInfoRecord,
   VodStreamRecord,
+  WatchHistoryRecord,
 } from "../../data/records";
 import { getVodById } from "../../data/catalogRepo";
 import { getVodInfo, saveVodInfo } from "../../data/seriesInfoRepo";
 import { isFavorite, toggleFavorite } from "../../data/favoritesRepo";
-import { getResumePositionMs } from "../../data/watchHistoryRepo";
+import { getHistoryEntryWithServerFallback } from "../../data/watchHistoryRepo";
 import { XtreamClient } from "../../api/xtreamClient";
 import { PlaybackUrlBuilder } from "../../api/playbackUrlBuilder";
-import { PlayableItem } from "../../models/playable";
+import { mediaDurationMs, PlayableItem } from "../../models/playable";
 import { useNavigation } from "../../navigation/NavigationStack";
 import { useScreenActive } from "../../navigation/ScreenLayer";
 import { KEY, normalizeKeyCode } from "../../navigation/keys";
-import { t } from "../../i18n";
+import { getLanguage, t } from "../../i18n";
 import { useCachedImage } from "../../services/imageCache";
 import { Button } from "../components/TextField";
 import { ServerClient } from "../../api/serverClient";
@@ -39,6 +40,36 @@ export function trailerUrl(value: string | undefined): string | undefined {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(normalized)}`;
 }
 
+export function formatHistoryTime(valueMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(valueMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+export function historyProgressPercent(
+  positionMs: number,
+  durationMs: number,
+): number | undefined {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return undefined;
+  return Math.max(0, Math.min(100, (positionMs / durationMs) * 100));
+}
+
+function formatHistoryDate(valueMs: number): string | undefined {
+  if (!Number.isFinite(valueMs) || valueMs <= 0) return undefined;
+  const date = new Date(valueMs);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toLocaleString(getLanguage(), {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function MovieDetailScreen({
   playlist,
   vodId,
@@ -52,6 +83,9 @@ export function MovieDetailScreen({
   // Backdrop waits for the get_vod_info attempt to settle: showing the
   // blurred poster first and swapping to the real art looks inconsistent.
   const [detailsSettled, setDetailsSettled] = useState(false);
+  const [historyEntry, setHistoryEntry] = useState<WatchHistoryRecord | undefined>(
+    undefined,
+  );
   const [resumeMs, setResumeMs] = useState<number | undefined>(undefined);
   const [favorite, setFavorite] = useState(false);
 
@@ -72,9 +106,21 @@ export function MovieDetailScreen({
       }
       if (!cancelled && record) setMovie(record);
 
-      setResumeMs(
-        await getResumePositionMs(db, playlist.id, "vod", String(vodId)),
+      const history = await getHistoryEntryWithServerFallback(
+        db,
+        playlist.id,
+        "vod",
+        String(vodId),
+        playlist.managedByServer === true,
       );
+      if (!cancelled) {
+        setHistoryEntry(history);
+        setResumeMs(
+          history && history.lastTimeMs >= 5000
+            ? history.lastTimeMs
+            : undefined,
+        );
+      }
       const fav = await isFavorite(db, playlist.id, "vod", String(vodId));
       if (!cancelled) setFavorite(fav);
 
@@ -192,19 +238,30 @@ export function MovieDetailScreen({
     let cancelled = false;
     void (async () => {
       const db = await getDb();
-      const [fav, resume] = await Promise.all([
+      const [fav, history] = await Promise.all([
         isFavorite(db, playlist.id, "vod", String(vodId)),
-        getResumePositionMs(db, playlist.id, "vod", String(vodId)),
+        getHistoryEntryWithServerFallback(
+          db,
+          playlist.id,
+          "vod",
+          String(vodId),
+          playlist.managedByServer === true,
+        ),
       ]);
       if (!cancelled) {
         setFavorite(fav);
-        setResumeMs(resume);
+        setHistoryEntry(history);
+        setResumeMs(
+          history && history.lastTimeMs >= 5000
+            ? history.lastTimeMs
+            : undefined,
+        );
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [screenActive, playlist.id, vodId]);
+  }, [screenActive, playlist.id, playlist.managedByServer, vodId]);
 
   const urls = useMemo(() => new PlaybackUrlBuilder(playlist), [playlist]);
 
@@ -233,6 +290,7 @@ export function MovieDetailScreen({
         containerExtension:
           details?.containerExtension ?? movie.containerExtension,
         resumeTimeMs: fromMs ?? 0,
+        durationMs: mediaDurationMs(details?.duration, details?.durationSecs),
       };
       push({ name: "player", playlist, items: [item], startIndex: 0 });
     },
@@ -268,6 +326,28 @@ export function MovieDetailScreen({
     durationLabel,
     rating ? `★ ${rating}` : undefined,
   ].filter((chip): chip is string => !!chip);
+  const metadataDurationMs = mediaDurationMs(
+    details?.duration,
+    details?.durationSecs,
+  );
+  const historyDurationMs =
+    historyEntry && historyEntry.durationMs > 0
+      ? historyEntry.durationMs
+      : metadataDurationMs ?? 0;
+  const historyPositionMs = historyEntry
+    ? Math.min(
+        historyEntry.lastTimeMs,
+        historyDurationMs > 0 ? historyDurationMs : historyEntry.lastTimeMs,
+      )
+    : 0;
+  const historyProgress = historyProgressPercent(
+    historyPositionMs,
+    historyDurationMs,
+  );
+  const watchedAt = historyEntry
+    ? formatHistoryDate(historyEntry.lastWatchedAt)
+    : undefined;
+  const remainingMs = Math.max(0, historyDurationMs - historyPositionMs);
 
   return (
     <FocusContext.Provider value={focusKey}>
@@ -296,6 +376,36 @@ export function MovieDetailScreen({
             <p className="detail-credit clamp-1">
               {t("movie.cast")}: {details.cast}
             </p>
+          )}
+          {historyEntry && historyEntry.lastTimeMs > 0 && (
+            <section className="detail-history" aria-label={t("history.title")}>
+              <div className="detail-history-header">
+                <span className="detail-history-title">{t("history.title")}</span>
+                <span className="detail-history-time">
+                  {formatHistoryTime(historyPositionMs)}
+                  {historyDurationMs > 0 &&
+                    ` / ${formatHistoryTime(historyDurationMs)}`}
+                </span>
+              </div>
+              {historyProgress !== undefined && (
+                <div className="detail-history-progress">
+                  <span
+                    className="detail-history-progress-fill"
+                    style={{ width: `${historyProgress}%` }}
+                  />
+                </div>
+              )}
+              <div className="detail-history-meta">
+                {watchedAt && (
+                  <span>
+                    {t("detail.watched")} {watchedAt}
+                  </span>
+                )}
+                {historyDurationMs > 0 && remainingMs > 0 && (
+                  <span>{t("detail.remaining_format", formatHistoryTime(remainingMs))}</span>
+                )}
+              </div>
+            </section>
           )}
           <div className="detail-actions">
             {resumeMs !== undefined && (

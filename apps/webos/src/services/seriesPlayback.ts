@@ -12,7 +12,7 @@ import {
   resolvedSeasons,
   XtreamSeriesInfo,
 } from "../models/xtream";
-import { PlayableItem } from "../models/playable";
+import { mediaDurationMs, PlayableItem } from "../models/playable";
 import { ServerClient } from "../api/serverClient";
 
 // Shared by the series detail screen and the continue-watching shelf (which
@@ -138,5 +138,6 @@ export function buildSeriesQueue(
     serverEpisodeId: playlist.managedByServer ? entry.id : undefined,
     seasonNumber: entry.seasonNumber,
     containerExtension: entry.containerExtension,
+    durationMs: mediaDurationMs(undefined, entry.durationSecs),
   }));
 }

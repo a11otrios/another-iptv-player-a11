@@ -1,6 +1,6 @@
 # webOS Known Issues
 
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-15
 
 Statuses describe evidence, not optimism. A source change is not resolved on
 the physical TV until the correct desktop build or IPK is installed and tested.
@@ -9,13 +9,36 @@ the physical TV until the correct desktop build or IPK is installed and tested.
 
 | Priority | Issue | Evidence | Current workaround | Next action |
 | --- | --- | --- | --- | --- |
-| P1 | VOD/series resume does not persist on webOS | On webOS 1.7.10, native media time/duration advanced but no new local or desktop history row appeared after playback/Back | None | Move checkpointing into a webOS-native-safe mechanism and add a physical regression |
 | P1 | In-app aspect ratio button has no visible effect | State and `object-fit` change, but LG native video ignores CSS aspect control | Use LG Picture > Aspect Ratio | Remove/disable the misleading control or design an explicit desktop-transcode solution |
 | P1 | Build-folder desktop executable can be unreachable from TV | TV `/playlists` and `/shelves` stayed pending while localhost worked; installed path restored service | Run installed `Program Files` executable | Add/update explicit Firewall handling and deployment verification |
 | P1 | Current EPG source fix may not be installed | Installed and release `data/app.so` hashes differed | Existing app remains usable; provider coverage varies | Install current desktop build properly, then retest |
+| P1 | Audible 4K playback still needs user confirmation | Final Wimpy Kid remux contains AAC-LC 5.1 and plays with `readyState=4`, but room audio cannot be observed through diagnostics; silence was reported on an earlier build | If silence remains, force compatibility audio to AAC stereo instead of stream-copy | Confirm sound at the TV, then either close this item or add audio-only transcode selection |
 | P2 | TV dashboard does not show Now/Next EPG on channel cards | TV requests EPG only after live playback starts | Open player/info; use desktop cards | Design a bounded/cached dashboard EPG strategy |
 | P2 | Provider EPG coverage is partial | Sampled channels had current/future data, while recently viewed channels had only expired or empty schedules | No EPG for channels without current provider data | Distinguish unavailable, stale, and request-error states in UI |
 | P2 | Windows artwork refresh reports need regression coverage | User reported favorites/history/category actions repeatedly refreshing icons | None confirmed | Reproduce with cache/network instrumentation and add widget regression tests |
+
+## Physically Verified in webOS 1.7.16
+
+- Backward seek recovery passed on the exact 4K MKV. Three Left presses moved
+  the absolute UI clock from `1:50` to `1:34`; the native HLS clock moved from
+  `73.096` to `57.861` and continued playing at `readyState=4`.
+- VOD resume passed end to end: a desktop-managed checkpoint survived leaving
+  playback, the detail screen offered the saved time, and native playback
+  reopened at that position. The desktop fallback is required on the tested TV
+  because its app origin returned IndexedDB `QuotaExceededError` even after
+  disposable-cache cleanup.
+- Movie Watch History physically rendered from the desktop-authoritative row
+  on the exact 4K detail screen: `11:48 / 56:11`, a matching progress bar,
+  `44:22` remaining, an app-locale watched timestamp, and separate Resume and
+  Play From Start buttons all fit on the LG OLED55B8PLA screen.
+- `EN - Diary Of A Wimpy Kid 4K (2021)` resumed from `36.433` seconds through
+  HLS remux on the LG OLED55B8PLA. The media clock advanced normally with
+  `readyState=4` and no error. Its generated stream contains native HEVC Main
+  10 `3840x2160` video and AAC-LC 5.1 audio.
+- The one-connection provider path passed random-access probing: overlapping
+  FFmpeg Range requests are parked locally and serialized upstream, with
+  provider keep-alive disabled. A redacted isolated trace successfully read
+  the Matroska index range, returned to media data, and produced video/audio.
 
 ## Implemented but Requiring Continued Physical Regression
 
@@ -36,8 +59,6 @@ the physical TV until the correct desktop build or IPK is installed and tested.
 
 - repeated sync quota failure now runs a second disposable-catalog migration,
   bounds poster-cache bytes, and retries quota-failed writes after cleanup.
-- movie detail refreshes its resume time after returning from playback, and
-  the player prefers freshly persisted progress over stale screen state.
 - Yellow opens the channel list during live playback; movie/episode Yellow
   continues to open track and subtitle settings.
 - synced desktop category order refreshes mounted dashboards and orders
@@ -54,10 +75,10 @@ the physical TV until the correct desktop build or IPK is installed and tested.
 - channel switching while player controls are visible.
 - dedicated programme up/down key handling.
 
-The TV-side changes above are installed in webOS `1.7.10`; the supporting
-desktop `1.7.1` installer is also installed. Do not remove an item from the
-active table solely because a package exists. Move it only after the installed
-binaries pass the relevant physical test.
+The TV-side changes above are installed in webOS `1.7.16`; the physical
+playback regression used the desktop source-tree release build. Do not remove
+an item from the active table solely because a package exists. Move it only
+after the installed binaries pass the relevant physical test.
 
 ## New Issue Template
 

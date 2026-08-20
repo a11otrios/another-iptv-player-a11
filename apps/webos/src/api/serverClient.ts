@@ -310,8 +310,25 @@ export class ServerClient {
       body: JSON.stringify(values),
     });
   }
-  playback(playlistId: string, type: CatalogKind, itemId: string, episodeId?: string, modePreference?: "remux" | "transcode"): Promise<PlaybackDescriptor> {
-    return this.request("/playback", { method: "POST", body: JSON.stringify({ playlistId, type, itemId, episodeId, modePreference }) });
+  playback(
+    playlistId: string,
+    type: CatalogKind,
+    itemId: string,
+    episodeId?: string,
+    modePreference?: "remux" | "transcode",
+    startPositionMs?: number,
+  ): Promise<PlaybackDescriptor> {
+    return this.request("/playback", {
+      method: "POST",
+      body: JSON.stringify({
+        playlistId,
+        type,
+        itemId,
+        episodeId,
+        modePreference,
+        startPositionMs,
+      }),
+    });
   }
   releasePlayback(playbackUrl: string): Promise<void> {
     const sessionId = mediaSessionIdFromPlaybackUrl(

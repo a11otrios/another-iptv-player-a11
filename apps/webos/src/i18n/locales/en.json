@@ -314,7 +314,7 @@
   "detail.resume": "Resume Where You Left Off",
   "detail.watch_now": "Watch Now",
   "detail.watch": "Watch",
-  "detail.restart": "Restart",
+  "detail.restart": "Play From Start",
   "detail.episode_fallback": "Episode",
   "detail.episode_count_plural": "{0} Episodes",
   "detail.watched": "Watched",
