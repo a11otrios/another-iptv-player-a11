@@ -17,6 +17,7 @@ import 'package:another_iptv_player/widgets/player-buttons/video_epg_widget.dart
 import 'package:another_iptv_player/widgets/player-buttons/video_settings_widget.dart';
 import 'package:another_iptv_player/widgets/player-buttons/video_title_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 class VideoWidget extends StatefulWidget {
@@ -170,6 +171,47 @@ class _VideoWidgetState extends State<VideoWidget> {
     );
   }
 
+  // Mirrors media_kit's default desktop keyboard shortcuts, but bumps the
+  // left/right arrow seek from 2s to 5s. Providing this map replaces the
+  // package defaults entirely, so every default binding is repeated here.
+  Map<ShortcutActivator, VoidCallback> _desktopKeyboardShortcuts(
+    BuildContext context,
+  ) {
+    final player = widget.controller.player;
+    return {
+      const SingleActivator(LogicalKeyboardKey.mediaPlay): player.play,
+      const SingleActivator(LogicalKeyboardKey.mediaPause): player.pause,
+      const SingleActivator(LogicalKeyboardKey.mediaPlayPause):
+          player.playOrPause,
+      const SingleActivator(LogicalKeyboardKey.mediaTrackNext): player.next,
+      const SingleActivator(LogicalKeyboardKey.mediaTrackPrevious):
+          player.previous,
+      const SingleActivator(LogicalKeyboardKey.space): player.playOrPause,
+      const SingleActivator(LogicalKeyboardKey.keyJ): () {
+        player.seek(player.state.position - const Duration(seconds: 10));
+      },
+      const SingleActivator(LogicalKeyboardKey.keyI): () {
+        player.seek(player.state.position + const Duration(seconds: 10));
+      },
+      const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
+        player.seek(player.state.position - const Duration(seconds: 5));
+      },
+      const SingleActivator(LogicalKeyboardKey.arrowRight): () {
+        player.seek(player.state.position + const Duration(seconds: 5));
+      },
+      const SingleActivator(LogicalKeyboardKey.arrowUp): () {
+        player.setVolume((player.state.volume + 5.0).clamp(0.0, 100.0));
+      },
+      const SingleActivator(LogicalKeyboardKey.arrowDown): () {
+        player.setVolume((player.state.volume - 5.0).clamp(0.0, 100.0));
+      },
+      const SingleActivator(LogicalKeyboardKey.keyF): () =>
+          toggleFullscreen(context),
+      const SingleActivator(LogicalKeyboardKey.escape): () =>
+          exitFullscreen(context),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -242,6 +284,7 @@ class _VideoWidgetState extends State<VideoWidget> {
             modifyVolumeOnScroll: false,
             toggleFullscreenOnDoublePress: true,
             playAndPauseOnTap: false,
+            keyboardShortcuts: _desktopKeyboardShortcuts(context),
             topButtonBar: [
               BackButtonWidget(),
               Expanded(child: VideoTitleWidget()),
@@ -269,6 +312,7 @@ class _VideoWidgetState extends State<VideoWidget> {
             modifyVolumeOnScroll: false,
             toggleFullscreenOnDoublePress: true,
             playAndPauseOnTap: false,
+            keyboardShortcuts: _desktopKeyboardShortcuts(context),
             topButtonBar: [
               BackButtonWidget(),
               Expanded(child: VideoTitleWidget()),
