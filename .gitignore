@@ -1,5 +1,6 @@
 # Repo-wide miscellaneous
 /AGENTS.md
+/CLAUDE.md
 *.log
 *.swp
 *.pyc
