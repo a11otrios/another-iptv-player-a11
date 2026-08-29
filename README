@@ -1,45 +1,149 @@
-Another IPTV Player
-===================
+Another IPTV Player — a11 fork
+================================
 
-A free, open-source IPTV player for Xtream Codes and M3U/M3U8 playlists —
-live TV, movies, and series. No analytics, no telemetry.
+A free, open-source IPTV player for Xtream Codes and M3U/M3U8 playlists.
+This fork extends the Flutter Windows application and adds a companion LG
+webOS client for live TV, movies, and series. It has no analytics, telemetry,
+ads, or bundled IPTV service.
 
-Not an IPTV provider: it hosts, sells, and distributes nothing.
-Bring your own compatible service. The app is being rewritten as native
-clients per platform; the original Flutter app is deprecated.
-
-
-Features
---------
-
-* Sources       — Xtream Codes and M3U/M3U8 (URL or file); multiple playlists.
-* Content       — live TV, movies, series with rich detail views, search,
-                  recently added.
-* Playback      — mpv engine: HDR tone-mapping, PiP, background audio, offline
-                  downloads, continue watching, auto play next, gestures,
-                  aspect-ratio modes.
-* Tracks & subs — per-item video/audio/subtitle memory; subtitle styling,
-                  timing offset, external .srt.
-* Organization  — favorites, resumable history, parental controls, hidden
-                  categories, stats.
-* App           — 10+ languages, no ads, no tracking.
+This project is not an IPTV provider. It hosts, sells, and distributes no
+content. Bring your own compatible service and use only content you are
+authorized to access.
 
 
-Getting Started
+Fork highlights
 ---------------
 
-1. Grab the latest build for your platform:
-   https://github.com/bsogulcan/another-iptv-player/releases
-2. Install and launch.
-3. Add your provider credentials (URL, username, password) or an M3U playlist.
+* Windows desktop — the Flutter app manages playlists, provider credentials,
+  catalogues, favorites, history, category preferences, channel shortcuts,
+  EPG data, subtitles, and playback.
+* LG webOS client — a TV-focused interface for browsing and playing the
+  desktop library without storing provider credentials on the television.
+* Secure LAN pairing — short-lived pairing codes and revocable device tokens;
+  API responses use opaque item identities and do not expose upstream URLs.
+* Lightweight synchronization — the TV receives bounded shelves and paged
+  category data while the desktop remains authoritative for shared state.
+* Playback compatibility — credential-safe proxying, HLS rewriting, FFmpeg
+  remux, and transcode fallbacks for formats the TV cannot play directly.
+* Resume and history — synchronized progress, continue watching, separate
+  Resume and Play From Start actions, and desktop fallback when TV storage is
+  unavailable.
+* TV controls — remote-friendly navigation, programme up/down zapping, Yellow
+  channel list, Blue shortcut-page cycling, and numeric channel shortcuts.
+* Tracks and subtitles — audio and subtitle selection, shared language
+  preferences, OpenSubtitles support, WebVTT delivery, timing offset, and
+  subtitle styling.
+* EPG improvements — provider-compatible schedule fallback plus tooling for
+  scheduled UK and Greek XMLTV guide updates.
+* Library organization — category ordering, hidden-category and radio filters,
+  per-category sorting, bulk category toggles, search, favorites, and history.
+* Playback fixes — more resilient webOS 4K resume, one-connection provider
+  handling, larger live-stream buffering, a compatible User-Agent, and
+  five-second Left/Right seeking in the desktop movie player.
+* Older-TV support — the webOS build targets the legacy Chromium environment
+  found on devices such as webOS 4.4 and includes bounded cache/quota recovery.
 
 
-Links
------
+Architecture
+------------
 
-* Website and user guides: https://another-iptv-player.com
-* Engineering docs:        shared/docs
-* Contributing:            CONTRIBUTING.md
+The Windows application is the source of truth. It stores credentials and the
+full catalogue, exposes an authenticated LAN API, and owns favorites, history,
+category settings, shortcuts, EPG processing, and compatibility media
+sessions. The webOS app owns TV navigation, presentation, LG lifecycle events,
+and native audio/video/subtitle integration. Desktop-owned values win when
+state is synchronized.
+
+The desktop server listens on TCP port `32145`; discovery uses UDP port
+`32146`. Provider credentials, bearer tokens, pairing codes, and signed media
+URLs must never be committed or included in diagnostics.
+
+
+Current source versions
+-----------------------
+
+* Windows Flutter application: `1.7.6+37`
+* LG webOS application: `1.7.16`
+* Desktop/webOS LAN API: version `1`
+
+Installed versions and release artifacts can differ from source. See
+`PROJECT_NOTES.md` and `shared/docs/webos/current-state.md` before building,
+installing, deploying, or testing on a physical TV.
+
+
+Getting started
+---------------
+
+1. Download a suitable build from this fork's releases:
+   https://github.com/a11otrios/another-iptv-player-a11/releases
+2. Install and launch the Windows application.
+3. Add Xtream Codes credentials or an M3U/M3U8 URL or file.
+4. For LG TV use, build and install the webOS package, then pair it with the
+   desktop application on the same local network.
+
+The Windows app must be reachable through Windows Firewall from the TV. A
+localhost connection alone does not prove LAN access. Follow the deployment
+guide before replacing an installed desktop executable or launching a TV
+package.
+
+
+Development
+-----------
+
+The main source locations are:
+
+* Windows desktop and LAN server: `apps/flutter`
+* LG webOS client: `apps/webos`
+* Shared engineering documentation: `shared/docs`
+* Client/server protocol: `shared/docs/webos-client-server-protocol.md`
+* Desktop/webOS feature matrix: `shared/docs/webos-feature-parity.md`
+
+Start with `PROJECT_NOTES.md`. It contains the current versions, required
+documentation order, safe build/deployment procedures, physical-TV rules, and
+known runtime hazards.
+
+Typical automated checks are:
+
+```powershell
+cd apps\flutter
+flutter test --no-pub
+flutter analyze --no-pub
+
+cd ..\webos
+pnpm run test
+pnpm run build
+```
+
+Do not launch the webOS app or start playback on a physical TV without first
+confirming that the TV is free and identifying the test content. Building an
+installer, installing packages, and running playback tests have additional
+safety steps in `shared/docs/webos/development-and-deployment.md`.
+
+
+Known limitations
+-----------------
+
+* LG's native video surface on tested hardware ignores CSS `object-fit`, so
+  the in-app aspect-ratio preference does not visibly change the picture. Use
+  the TV's Picture settings.
+* Windows Firewall access is executable-path-specific. A source-tree build may
+  work on localhost while remaining unreachable from the TV.
+* Provider EPG coverage varies, and dashboard cards do not yet show Now/Next
+  data before live playback begins.
+* Some hardware-dependent audio, HDR, embedded-track, and lifecycle behavior
+  still requires physical-device verification.
+
+See `shared/docs/webos/known-issues.md` for evidence, workarounds, and current
+validation status.
+
+
+Upstream and links
+------------------
+
+* This fork: https://github.com/a11otrios/another-iptv-player-a11
+* Upstream project: https://github.com/bsogulcan/another-iptv-player
+* Upstream website and guides: https://another-iptv-player.com
+* Contributing: `CONTRIBUTING.md`
 
 
 Acknowledgements
@@ -48,17 +152,17 @@ Acknowledgements
 Name inspired by Another Redis Desktop Manager
 (https://github.com/qishibo/AnotherRedisDesktopManager).
 
-Flutter playback via media_kit (https://github.com/media-kit/media-kit).
+Flutter playback uses media_kit (https://github.com/media-kit/media-kit).
+LG playback and lifecycle behavior draws on the Apache-2.0 licensed
+webos-iptv-player project (https://github.com/lennylxx/webos-iptv-player).
 
-Xtream Codes API behavior documented by JUL1EN094
+Xtream Codes API behavior was documented by JUL1EN094
 (https://github.com/AndreyPavlenko/Fermata/discussions/434).
 
-Thanks to ls-hidden and mode0192 for issues, PRs, and testing.
+Thanks to the upstream maintainers and contributors.
 
 
 License
 -------
 
-See LICENSE. Use only with a legal IPTV service you are authorized to access.
-
-Support development: https://www.buymeacoffee.com/bsogulcan
+See `LICENSE`. Use only with a legal IPTV service you are authorized to access.
