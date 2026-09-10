@@ -729,7 +729,10 @@ class LanServerController extends ChangeNotifier {
         final manifest = await utf8.decoder.bind(response).join();
         final rewritten = _rewriteHlsManifest(
           manifest,
-          Uri.parse(ticket.descriptor.url),
+          response.redirects.fold<Uri>(
+            Uri.parse(ticket.descriptor.url),
+            (uri, redirect) => uri.resolveUri(redirect.location),
+          ),
           ticket,
           requestOrigin: _requestOrigin(incoming),
         );
@@ -755,39 +758,47 @@ class LanServerController extends ChangeNotifier {
         final value = response.headers.value(header);
         if (value != null) incoming.response.headers.set(header, value);
       }
-      final streamDone = Completer<void>();
+      // addStream propagates downstream backpressure. The forwarding controller
+      // also lets a superseding FFmpeg Range request cancel the current input.
       late final StreamSubscription<List<int>> subscription;
-      subscription = response.listen(
-        incoming.response.add,
-        onError: (Object error, StackTrace stackTrace) {
-          if (!streamDone.isCompleted) {
-            streamDone.completeError(error, stackTrace);
-          }
+      late final StreamController<List<int>> forwarding;
+      var upstreamFinished = false;
+      final superseded = Completer<void>();
+      forwarding = StreamController<List<int>>(
+        onListen: () {
+          subscription = response.listen(
+            forwarding.add,
+            onError: forwarding.addError,
+            onDone: () {
+              upstreamFinished = true;
+              unawaited(forwarding.close());
+            },
+          );
         },
-        onDone: () {
-          if (!streamDone.isCompleted) streamDone.complete();
-        },
-        cancelOnError: true,
+        onPause: () => subscription.pause(),
+        onResume: () => subscription.resume(),
+        onCancel: () => subscription.cancel(),
       );
       cancelUpstream = () async {
-        if (streamDone.isCompleted) return;
+        if (!superseded.isCompleted) superseded.complete();
+        if (upstreamFinished) return;
+        upstreamFinished = true;
         await subscription.cancel();
-        if (!streamDone.isCompleted) streamDone.complete();
+        unawaited(forwarding.close());
       };
-      if (serializesUpstream) {
-        ticket.cancelActiveUpstream = cancelUpstream;
-      }
+      if (serializesUpstream) ticket.cancelActiveUpstream = cancelUpstream;
+      final transfer = incoming.response.addStream(forwarding.stream);
       unawaited(
         incoming.response.done.then<void>(
           (_) async {
-            if (!streamDone.isCompleted) await cancelUpstream!();
+            await cancelUpstream!();
           },
           onError: (Object _, StackTrace __) async {
-            if (!streamDone.isCompleted) await cancelUpstream!();
+            await cancelUpstream!();
           },
         ),
       );
-      await streamDone.future;
+      await Future.any<void>([transfer, superseded.future]);
       if (serializesUpstream &&
           requestGeneration != ticket.latestUpstreamRequest) {
         return;

@@ -1,6 +1,6 @@
 # webOS Current State
 
-Last updated: 2026-08-15
+Last updated: 2026-09-04
 
 This file records facts needed to resume safely. Verify volatile network and
 process details before relying on them.
@@ -12,7 +12,7 @@ process details before relying on them.
 | Flutter desktop source | `1.7.1+32` |
 | Windows installer artifact | `1.7.1` |
 | Installed Windows desktop | `1.7.1+32` |
-| webOS source/installed package | `1.7.16` |
+| webOS source/installed package | `1.7.17` |
 | webOS app ID | `com.devyorg.anotheriptvplayer` |
 | Physical TV | LG OLED55B8PLA, webOS 4.4 / Chromium 53 |
 | CLI device name | `tv` |
@@ -20,6 +20,63 @@ process details before relying on them.
 
 The observed TV address was `192.168.1.168` and the desktop address was
 `192.168.1.181`. Both are DHCP addresses and must be rechecked.
+
+## Source Review Fixes: 2026-09-05 (Not Deployed)
+
+- TV launch and playlist reads have bounded storage waits and retain recovery
+  controls on failure. Image network requests, including body downloads, now
+  time out and fall back to the original image URL.
+- Desktop stream forwarding applies downstream backpressure while retaining
+  cancellation for superseded FFmpeg requests. HLS relative references resolve
+  against the final redirected manifest location.
+- FFmpeg remux/transcode retains all audio tracks and their language metadata.
+  The TV retries preferences when tracks arrive late, restores manual choices
+  after native video recovery, and uses native selection state for checkmarks.
+  A rejected selection leaves the previous audio track enabled and reports a
+  failure instead of saving a false preference.
+- Player controls expose separate Audio and Subtitle panels, keep selection
+  feedback visible, and remove the ineffective CSS aspect button/Green shortcut.
+  Existing saved aspect settings are preserved; use LG Picture settings.
+- Validation: webOS unit tests and TypeScript/modern/Chromium-53 builds pass;
+  desktop media/LAN tests and focused Dart analysis pass. Synthetic FFmpeg
+  conversion retains German and English audio in both remux and transcode HLS.
+  An isolated Edge check renders the actual player controls, checks manual
+  audio selection feedback, and verifies startup recovery with hung IndexedDB.
+- No installer, TV package installation, live app replacement, provider test,
+  or physical-TV playback was performed. Audible native track switching and
+  multi-audio HLS support remain hardware regression requirements. Installed
+  versions are unchanged; all source changes remain uncommitted.
+
+## Maintenance Record: 2026-09-04
+
+- The TV reported a lost desktop pairing without a user-initiated reinstall.
+  Passive inspection found the pairing form open, all webOS `localStorage`
+  keys absent, and an IndexedDB audit remaining pending. The installed desktop
+  server was healthy and still retained the earlier paired-device records.
+- The retained `com.devyorg.anotheriptvplayer_1.7.16_all.ipk` package was
+  installed in place on the configured LG OLED55B8PLA, then explicitly
+  launched for pairing at the user's request. No content was selected or
+  played.
+- Pairing to the installed desktop server succeeded. The TV persisted the new
+  connection record and other local settings, synchronized `Playlist-1`, and
+  rendered a populated dashboard with five shelves.
+- The initial in-place reinstall did not rebuild the package or run playback
+  checks.
+- A follow-up banner diagnosis found 76 of 77 dashboard images indefinitely
+  waiting behind a pending IndexedDB image-cache read. webOS `1.7.17` adds a
+  bounded cache-read timeout and a session circuit breaker so artwork falls
+  back to its original URL instead of remaining blocked by storage.
+- Version `1.7.17` also stores a small redundant pairing record in IndexedDB
+  and restores the primary `localStorage` record at startup. Physical fault
+  injection removed only the primary record; after an app restart the TV
+  restored it, skipped pairing, and returned to the populated five-shelf
+  dashboard.
+- Fresh artwork still did not decode during the physical check because the
+  external plain-HTTP image origin timed out from both the TV and desktop;
+  HTTPS to the same origin also timed out. One previously cached blob rendered.
+- Automated checks for `1.7.17`: 262 tests passed with one skipped;
+  TypeScript and both modern and Chromium-53 legacy production builds passed.
+  No playback checks were run. The retained `1.7.16` IPK is the rollback.
 
 ## Release Record: 2026-08-15
 
@@ -85,9 +142,10 @@ The observed TV address was `192.168.1.168` and the desktop address was
   the listener before relying on it.
 - The installed desktop executable is
   `C:\Program Files\Another IPTV Player\iptv_player.exe` (`1.7.1+32`).
-- The TV was reachable as an LG OLED55B8PLA running webOS 4.4; webOS `1.7.16`
-  was installed. The final observation left the app on the exact 4K movie
-  detail screen with its verified Watch History card visible.
+- The TV was reachable as an LG OLED55B8PLA running webOS 4.4; webOS `1.7.17`
+  was installed. The final observation left the app on the synchronized Live
+  TV dashboard after the pairing-recovery fault-injection check; no playback
+  was started.
 
 Runtime state does not survive a reboot or later user action. Confirm it with
 the diagnostics guide.

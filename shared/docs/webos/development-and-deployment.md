@@ -77,10 +77,10 @@ pnpm run build
 pnpm run package
 ```
 
-The package output for version 1.7.16 is:
+The package output for version 1.7.17 is:
 
 ```text
-apps/webos/com.devyorg.anotheriptvplayer_1.7.16_all.ipk
+apps/webos/com.devyorg.anotheriptvplayer_1.7.17_all.ipk
 ```
 
 Version changes must update at least:
@@ -96,7 +96,7 @@ After Developer Mode and Key Server are ready:
 
 ```powershell
 pnpm exec ares-device --system-info --device tv
-pnpm exec ares-install --device tv .\com.devyorg.anotheriptvplayer_1.7.16_all.ipk
+pnpm exec ares-install --device tv .\com.devyorg.anotheriptvplayer_1.7.17_all.ipk
 pnpm exec ares-install --device tv --list
 ```
 

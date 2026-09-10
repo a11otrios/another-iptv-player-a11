@@ -8,6 +8,8 @@ export interface TrackInfo {
   label?: string;
   /** Secondary caption (iOS parity): codec · resolution · channels · LANG. */
   detail?: string;
+  /** Selection reported by the media engine, not the last button pressed. */
+  selected?: boolean;
 }
 
 export interface PlaybackSource {
@@ -24,6 +26,7 @@ export type PlayerState = "idle" | "preparing" | "playing" | "paused";
 
 export interface PlayerEventMap {
   prepared: { durationMs: number };
+  trackschange: { tracks: TrackInfo[] };
   timeupdate: { positionMs: number };
   buffering: { done: boolean; percent?: number };
   ended: Record<string, never>;

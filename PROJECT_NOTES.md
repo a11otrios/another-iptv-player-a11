@@ -79,7 +79,7 @@ for the safe update procedure.
 
 - Flutter desktop source and installer artifact: `1.7.4+35`
 - Installed desktop app: `1.7.1+32`
-- webOS source/package: `1.7.16`; installed TV package: `1.7.13`
+- webOS source/package and installed TV package: `1.7.17`
 - webOS app ID: `com.devyorg.anotheriptvplayer`
 - Desktop LAN port: `32145`; discovery UDP port: `32146`
 

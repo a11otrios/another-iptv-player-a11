@@ -13,6 +13,8 @@ import {
 
 const MEMORY_MAX_ENTRIES = 500;
 const MAX_SINGLE_IMAGE_BYTES = 2 * 1024 * 1024;
+export const IMAGE_CACHE_READ_TIMEOUT_MS = 1500;
+export const IMAGE_FETCH_TIMEOUT_MS = 8000;
 // Rewriting lastUsedAt on every disk hit meant one IDB write per poster while
 // scrolling — exactly when the main thread should stay idle. Recency only
 // matters at prune granularity, so refresh it at most this often per row.
@@ -24,6 +26,29 @@ const inflight = new Map<string, Promise<string>>();
 // src for the rest of the session instead of re-failing per card.
 const uncacheable = new Set<string>();
 let pruneScheduled = false;
+// IndexedDB on the physical webOS 4.4 TV can remain pending indefinitely
+// after its quota ledger becomes unhealthy. Once that happens, bypass the
+// optional disk tier for this app session so artwork can still load directly.
+let diskCacheUnavailable = false;
+
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Image cache storage timed out")),
+      timeoutMs,
+    );
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 function remember(url: string, objectUrl: string): void {
   memory.set(url, objectUrl);
@@ -57,7 +82,7 @@ async function prune(): Promise<void> {
 }
 
 async function cacheBlob(url: string, blob: Blob): Promise<void> {
-  if (blob.size > MAX_SINGLE_IMAGE_BYTES) return;
+  if (diskCacheUnavailable || blob.size > MAX_SINGLE_IMAGE_BYTES) return;
   const db = await getDb();
   try {
     await db.put("imageCache", {
@@ -76,22 +101,42 @@ async function cacheBlob(url: string, blob: Blob): Promise<void> {
 }
 
 async function resolve(url: string): Promise<string> {
-  const db = await getDb();
-  const row = await db.get("imageCache", url);
-  if (row) {
-    // Touch for LRU (throttled); fire-and-forget.
-    if (Date.now() - row.lastUsedAt > TOUCH_MIN_MS) {
-      void db
-        .put("imageCache", { ...row, lastUsedAt: Date.now() })
-        .catch(() => {});
+  if (!diskCacheUnavailable) {
+    try {
+      const db = await withTimeout(getDb(), IMAGE_CACHE_READ_TIMEOUT_MS);
+      const row = await withTimeout(
+        db.get("imageCache", url),
+        IMAGE_CACHE_READ_TIMEOUT_MS,
+      );
+      if (row) {
+        // Touch for LRU (throttled); fire-and-forget.
+        if (Date.now() - row.lastUsedAt > TOUCH_MIN_MS) {
+          void db
+            .put("imageCache", { ...row, lastUsedAt: Date.now() })
+            .catch(() => {});
+        }
+        const objectUrl = URL.createObjectURL(row.blob);
+        remember(url, objectUrl);
+        return objectUrl;
+      }
+    } catch {
+      diskCacheUnavailable = true;
     }
-    const objectUrl = URL.createObjectURL(row.blob);
-    remember(url, objectUrl);
-    return objectUrl;
   }
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const blob = await response.blob();
+  // Chromium 53 has no AbortController. Bound the complete download even
+  // there; newer browsers also cancel the network request on timeout.
+  const controller = typeof AbortController === "undefined" ? undefined : new AbortController();
+  let blob: Blob;
+  try {
+    blob = await withTimeout((async () => {
+      const response = controller ? await fetch(url, { signal: controller.signal }) : await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.blob();
+    })(), IMAGE_FETCH_TIMEOUT_MS);
+  } catch (error) {
+    controller?.abort();
+    throw error;
+  }
   const objectUrl = URL.createObjectURL(blob);
   remember(url, objectUrl);
   void cacheBlob(url, blob);

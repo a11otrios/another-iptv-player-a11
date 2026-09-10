@@ -54,6 +54,23 @@ describe("desktop server client", () => {
     expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer secret");
   });
 
+  it("restores pairing from IndexedDB when localStorage is lost", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "secret", deviceId: "tv1", deviceName: "LG TV" }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ apiVersion: 1, data: [] }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ServerClient.pair("192.168.1.20:32145", "123456");
+    values.clear();
+
+    const restored = await ServerClient.restore();
+    expect(restored).not.toBeNull();
+    expect(values.has("aiptv.webos.server.v1")).toBe(true);
+    await restored!.playlists();
+    expect(fetchMock.mock.calls[1][1].headers.Authorization)
+      .toBe("Bearer secret");
+  });
+
   it("reclaims image storage and retries pairing-token persistence", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

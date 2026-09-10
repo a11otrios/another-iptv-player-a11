@@ -8,6 +8,8 @@ import {
 } from "../data/db";
 
 const CONNECTION_KEY = "aiptv.webos.server.v1";
+const CONNECTION_BACKUP_KEY = "serverConnectionV1";
+const CONNECTION_STORAGE_TIMEOUT_MS = 1500;
 let relocationInFlight: Promise<ServerConnection | null> | null = null;
 
 export interface ServerConnection {
@@ -188,6 +190,56 @@ export function getServerConnection(): ServerConnection | null {
 
 export function clearServerConnection(): void {
   localStorage.removeItem(CONNECTION_KEY);
+  void deleteServerConnectionBackup();
+}
+
+function validServerConnection(value: unknown): value is ServerConnection {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ServerConnection>;
+  return Boolean(candidate.baseUrl && candidate.token);
+}
+
+function withStorageTimeout<T>(operation: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Connection backup storage timed out")),
+      CONNECTION_STORAGE_TIMEOUT_MS,
+    );
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function backupServerConnection(
+  connection: ServerConnection,
+): Promise<void> {
+  try {
+    const db = await withStorageTimeout(getDb());
+    await withStorageTimeout(db.put("appState", {
+      key: CONNECTION_BACKUP_KEY,
+      value: connection,
+    }));
+  } catch {
+    // The primary localStorage record already succeeded. A broken optional
+    // backup must never prevent pairing, relocation, or application startup.
+  }
+}
+
+async function deleteServerConnectionBackup(): Promise<void> {
+  try {
+    const db = await withStorageTimeout(getDb());
+    await withStorageTimeout(db.delete("appState", CONNECTION_BACKUP_KEY));
+  } catch {
+    // Best-effort cleanup when the TV storage subsystem is unavailable.
+  }
 }
 
 async function persistServerConnection(
@@ -196,6 +248,7 @@ async function persistServerConnection(
   const value = JSON.stringify(connection);
   try {
     localStorage.setItem(CONNECTION_KEY, value);
+    await backupServerConnection(connection);
     return;
   } catch (error) {
     if (!isQuotaExceededError(error)) throw error;
@@ -205,6 +258,7 @@ async function persistServerConnection(
   await db.clear("imageCache");
   try {
     localStorage.setItem(CONNECTION_KEY, value);
+    await backupServerConnection(connection);
     return;
   } catch (error) {
     if (!isQuotaExceededError(error)) throw error;
@@ -218,6 +272,7 @@ async function persistServerConnection(
     await clearCatalogStores(db);
   }
   localStorage.setItem(CONNECTION_KEY, value);
+  await backupServerConnection(connection);
 }
 
 export class ServerClient {
@@ -252,6 +307,25 @@ export class ServerClient {
   static connected(): ServerClient | null {
     const connection = getServerConnection();
     return connection ? new ServerClient(connection) : null;
+  }
+
+  static async restore(): Promise<ServerClient | null> {
+    const current = getServerConnection();
+    if (current) {
+      void backupServerConnection(current);
+      return new ServerClient(current);
+    }
+    try {
+      const db = await withStorageTimeout(getDb());
+      const backup = await withStorageTimeout(
+        db.get("appState", CONNECTION_BACKUP_KEY),
+      );
+      if (!validServerConnection(backup?.value)) return null;
+      localStorage.setItem(CONNECTION_KEY, JSON.stringify(backup.value));
+      return new ServerClient(backup.value);
+    } catch {
+      return null;
+    }
   }
 
   playlists(): Promise<ServerPlaylist[]> { return this.get("/playlists"); }

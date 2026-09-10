@@ -10,7 +10,7 @@ export const SUBTITLE_OFF = "__off__";
 
 function normalize(language: string | undefined): string | undefined {
   if (!language) return undefined;
-  const lower = language.trim().toLowerCase();
+  const lower = language.trim().toLowerCase().split(/[-_]/)[0];
   if (lower === "") return undefined;
   // Collapse ISO 639-2/B vs T duplicates commonly seen in streams.
   const aliases: { [key: string]: string } = {
@@ -56,7 +56,7 @@ function findByLanguage(
  * preference — or no preference at all — keeps them hidden even when AVPlay
  * auto-selects a text track.
  */
-export function applyTrackPreferences(player: PlayerPort): {
+export function applyTrackPreferences(player: PlayerPort, options: { audio?: boolean; text?: boolean } = {}): {
   textEnabled: boolean;
 } {
   const tracks = player.getTracks();
@@ -65,7 +65,10 @@ export function applyTrackPreferences(player: PlayerPort): {
     tracks.filter((track) => track.type === "AUDIO"),
     settings.preferredAudioLanguage,
   );
-  if (audio) player.selectTrack("AUDIO", audio.index);
+  if (audio && options.audio !== false && !audio.selected) {
+    try { player.selectTrack("AUDIO", audio.index); } catch { /* Keep the native default if unsupported. */ }
+  }
+  if (options.text === false) return { textEnabled: tracks.some(track => track.type === "TEXT" && track.selected) };
 
   const subtitlePref = settings.preferredSubtitleLanguage;
   if (subtitlePref === null || subtitlePref === SUBTITLE_OFF) {
@@ -76,7 +79,7 @@ export function applyTrackPreferences(player: PlayerPort): {
     subtitlePref,
   );
   if (text) {
-    player.selectTrack("TEXT", text.index);
+    if (!text.selected) player.selectTrack("TEXT", text.index);
     return { textEnabled: true };
   }
   return { textEnabled: false };

@@ -26,13 +26,15 @@ function TrackButton({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { ref, focused } = useFocusable({ onEnterPress: onSelect });
+  const { ref, focused } = useFocusable({ onEnterPress: onSelect, onFocus: () => {
+    ref.current?.scrollIntoView({ block: "nearest" });
+  } });
   const classes = ["track-button"];
   if (selected) classes.push("selected");
   if (focused) classes.push("focused");
   return (
-    <div ref={ref} className={classes.join(" ")}>
-      <span className="track-button-label">{label}</span>
+    <div ref={ref} role="button" aria-pressed={selected} onClick={onSelect} className={classes.join(" ")}>
+      <span className="track-button-label">{selected && <span aria-hidden="true">✓ </span>}{label}</span>
       {detail && <span className="track-button-detail">{detail}</span>}
     </div>
   );
@@ -48,6 +50,8 @@ function trackLabel(track: TrackInfo, index: number): string {
 
 export function TrackSettingsPanel({
   tracks,
+  section,
+  status,
   selected,
   onSelectTrack,
   onDisableText,
@@ -57,6 +61,8 @@ export function TrackSettingsPanel({
   onAdjustSubtitleOffset,
 }: {
   tracks: TrackInfo[];
+  section?: "AUDIO" | "TEXT";
+  status?: string | null;
   /** Currently selected index per type (-1 = unknown). */
   selected: { [K in TrackType]?: number };
   onSelectTrack: (track: TrackInfo) => void;
@@ -81,12 +87,14 @@ export function TrackSettingsPanel({
   return (
     <FocusContext.Provider value={focusKey}>
       <div ref={ref} className="track-panel">
-        {(["AUDIO", "TEXT", "VIDEO"] as TrackType[]).map((type) => {
+        {(section ? [section] : ["AUDIO", "TEXT", "VIDEO"] as TrackType[]).map((type) => {
           const group = byType[type];
-          if (group.length === 0 && type !== "TEXT") return null;
+          if (group.length === 0 && type === "VIDEO") return null;
           return (
             <div key={type} className="track-column">
               <h3>{t(TYPE_LABEL_KEYS[type])}</h3>
+              <p role="status">{status || t("tv.tracks.hint")}</p>
+              {type === "AUDIO" && group.length === 0 && <p>{t("tv.tracks.empty")}</p>}
               {type === "TEXT" && (
                 <>
                   <TrackButton
@@ -121,7 +129,7 @@ export function TrackSettingsPanel({
                 <TrackButton
                   key={`${type}-${track.index}`}
                   label={trackLabel(track, index)}
-                  detail={track.detail}
+                  detail={track.detail || track.language?.toUpperCase()}
                   selected={!(
                     type === "TEXT" && textDisabled
                   ) && selected[type] === track.index}

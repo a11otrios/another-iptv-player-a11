@@ -1,8 +1,90 @@
+import 'dart:io';
 import 'package:another_iptv_player/services/lan_server/lan_library_service.dart';
 import 'package:another_iptv_player/services/lan_server/lan_media_pipeline.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  final testFfmpeg = Platform.environment['AIPTV_TEST_FFMPEG'];
+  test(
+    'keeps both tagged audio streams in actual remux and transcode output',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'aiptv-audio-test-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final input = '${directory.path}/two-audio.mkv';
+      final generated = await Process.run(testFfmpeg!, [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=black:s=64x64:r=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=880',
+        '-map',
+        '0:v',
+        '-map',
+        '1:a',
+        '-map',
+        '2:a',
+        '-metadata:s:a:0',
+        'language=deu',
+        '-metadata:s:a:1',
+        'language=eng',
+        '-c:v',
+        'mpeg2video',
+        '-c:a',
+        'aac',
+        '-t',
+        '2',
+        input,
+      ]);
+      expect(generated.exitCode, 0, reason: generated.stderr.toString());
+      for (final transcode in [false, true]) {
+        final output =
+            '${directory.path}/${transcode ? 'transcode' : 'remux'}.m3u8';
+        final converted = await Process.run(
+          testFfmpeg,
+          buildLanMediaArguments(
+            source: LanPlaybackDescriptor(
+              url: input,
+              mimeType: 'video/x-matroska',
+              isLive: false,
+            ),
+            transcode: transcode,
+            segmentPath: '${directory.path}/${transcode}_%06d.ts',
+            playlistPath: output,
+          ),
+        );
+        expect(converted.exitCode, 0, reason: converted.stderr.toString());
+        final inspected = await Process.run(testFfmpeg, [
+          '-hide_banner',
+          '-i',
+          output,
+          '-map',
+          '0:a:1',
+          '-f',
+          'null',
+          '-',
+        ]);
+        expect(inspected.exitCode, 0, reason: inspected.stderr.toString());
+        expect(inspected.stderr.toString(), contains('(deu)'));
+        expect(inspected.stderr.toString(), contains('(eng)'));
+      }
+    },
+    skip: testFfmpeg == null
+        ? 'Set AIPTV_TEST_FFMPEG to exercise local media conversion'
+        : false,
+  );
+
   test('resolves FFmpeg from explicit and environment overrides first', () {
     expect(
       resolveFfmpegExecutable(
@@ -49,6 +131,8 @@ void main() {
       playlistPath: 'index.m3u8',
     );
 
+    expect(args, containsAllInOrder(['-map', '0:a?']));
+    expect(args, isNot(contains('0:a:0?')));
     expect(args, containsAllInOrder(['-c', 'copy']));
     expect(args, isNot(contains('-vf')));
   });
@@ -64,6 +148,7 @@ void main() {
       segmentPath: 'segment_%06d.ts',
       playlistPath: 'index.m3u8',
     );
+    expect(args, containsAllInOrder(['-map', '0:a?']));
     final filterIndex = args.indexOf('-vf');
     final levelIndex = args.indexOf('-level');
 

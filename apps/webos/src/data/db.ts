@@ -13,7 +13,12 @@ import {
 } from "./records";
 
 export const DB_NAME = "aiptv";
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
+
+export interface AppStateRecord {
+  key: string;
+  value: unknown;
+}
 
 /** Disk tier of the image cache (posters/backdrops); pruned LRU. */
 export interface ImageCacheRecord {
@@ -24,6 +29,10 @@ export interface ImageCacheRecord {
 }
 
 export interface AppDBSchema extends DBSchema {
+  appState: {
+    key: string;
+    value: AppStateRecord;
+  };
   playlists: {
     key: string;
     value: PlaylistRecord;
@@ -147,6 +156,9 @@ export function getDb(): Promise<AppDB> {
             keyPath: "url",
           });
           imageCache.createIndex("byLastUsed", "lastUsedAt");
+        }
+        if (oldVersion < 3) {
+          db.createObjectStore("appState", { keyPath: "key" });
         }
       },
     });

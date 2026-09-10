@@ -140,7 +140,7 @@ export class Html5VideoAdapter implements PlayerPort {
     if (!tracks) return [];
     const result: TrackInfo[] = [];
     for (let i = 0; i < tracks.length; i++) {
-      result.push({ type: "TEXT", index: i, language: tracks[i].language, label: tracks[i].label });
+      result.push({ type: "TEXT", index: i, language: tracks[i].language, label: tracks[i].label, selected: tracks[i].mode !== "disabled" });
     }
     return result;
   }

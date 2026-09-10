@@ -9,7 +9,7 @@ interface AudioTrack {
 interface AudioTrackList {
   readonly length: number;
   [index: number]: AudioTrack;
-  addEventListener?(type: "addtrack" | "change", listener: EventListener): void;
+  addEventListener?(type: "addtrack" | "removetrack" | "change", listener: EventListener): void;
 }
 
 interface HTMLMediaElement {

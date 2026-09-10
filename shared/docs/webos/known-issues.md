@@ -5,6 +5,15 @@ Last reviewed: 2026-08-15
 Statuses describe evidence, not optimism. A source change is not resolved on
 the physical TV until the correct desktop build or IPK is installed and tested.
 
+## Source Fixes Awaiting Deployment: 2026-09-05
+
+The current source removes the ineffective aspect control and addresses startup
+storage hangs, stalled artwork downloads, HLS redirects, stream backpressure,
+and discarded/late audio tracks. Audio selection now reports native state and
+keeps failed selections out of saved preferences. These are locally validated
+source changes, not claims of physical-TV resolution; see current-state.md.
+Provider-origin outages and room-audio verification remain open.
+
 ## Active and Confirmed
 
 | Priority | Issue | Evidence | Current workaround | Next action |
@@ -16,6 +25,7 @@ the physical TV until the correct desktop build or IPK is installed and tested.
 | P2 | TV dashboard does not show Now/Next EPG on channel cards | TV requests EPG only after live playback starts | Open player/info; use desktop cards | Design a bounded/cached dashboard EPG strategy |
 | P2 | Provider EPG coverage is partial | Sampled channels had current/future data, while recently viewed channels had only expired or empty schedules | No EPG for channels without current provider data | Distinguish unavailable, stale, and request-error states in UI |
 | P2 | Windows artwork refresh reports need regression coverage | User reported favorites/history/category actions repeatedly refreshing icons | None confirmed | Reproduce with cache/network instrumentation and add widget regression tests |
+| P2 | Fresh TV dashboard artwork origin is unreachable | On 2026-09-04, 76/77 cards had valid image URLs; the external HTTP origin timed out from TV and desktop, and HTTPS also timed out | Previously cached blobs still render; initials remain as fallback | Recheck the external origin/provider and consider a desktop-owned artwork cache/proxy if outages persist |
 
 ## Physically Verified in webOS 1.7.16
 
@@ -39,6 +49,15 @@ the physical TV until the correct desktop build or IPK is installed and tested.
   FFmpeg Range requests are parked locally and serialized upstream, with
   provider keep-alive disabled. A redacted isolated trace successfully read
   the Matroska index range, returned to media data, and produced video/audio.
+
+## Physically Verified in webOS 1.7.17
+
+- A pending IndexedDB image-cache read no longer leaves eager dashboard
+  artwork permanently in `waiting`; after the timeout, affected cards advance
+  to direct network loading.
+- Pairing recovery passed fault injection: after removing only the primary
+  `localStorage` connection record and restarting, the IndexedDB backup
+  restored it and the app opened the synchronized dashboard without pairing.
 
 ## Implemented but Requiring Continued Physical Regression
 

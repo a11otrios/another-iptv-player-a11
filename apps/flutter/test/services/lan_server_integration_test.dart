@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -24,8 +25,12 @@ void main() {
   late HttpServer upstream;
   late Uri baseUri;
   late Directory tempDirectory;
+  var largeStream = false;
+  var producedChunks = 0;
 
   setUp(() async {
+    largeStream = false;
+    producedChunks = 0;
     SharedPreferences.setMockInitialValues({
       'channel_shortcuts_playlist-1': jsonEncode({
         '1': {'id': 'channel-1', 'name': 'Kids One', 'imagePath': null},
@@ -62,6 +67,18 @@ void main() {
         await request.response.close();
         return;
       }
+      if (request.uri.path.endsWith('index.m3u8') &&
+          !request.uri.path.startsWith('/redirected/')) {
+        await request.response.redirect(Uri.parse('/redirected/index.m3u8'));
+        return;
+      }
+      if ((request.uri.path.endsWith('segment.ts') ||
+              request.uri.path.endsWith('key.bin')) &&
+          !request.uri.path.startsWith('/redirected/')) {
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+        return;
+      }
       if (request.uri.path.endsWith('index.m3u8')) {
         request.response.headers.contentType = ContentType(
           'application',
@@ -74,6 +91,23 @@ void main() {
 segment.ts
 ''');
         await request.response.close();
+        return;
+      }
+      if (largeStream) {
+        Stream<List<int>> chunks() async* {
+          final chunk = List<int>.filled(64 * 1024, 0x47);
+          for (var i = 0; i < 2048; i++) {
+            producedChunks++;
+            yield chunk;
+          }
+        }
+
+        try {
+          await request.response.addStream(chunks());
+          await request.response.close();
+        } catch (_) {
+          /* Test client intentionally disconnects. */
+        }
         return;
       }
       request.response.headers.contentType = ContentType('video', 'mp2t');
@@ -188,6 +222,45 @@ segment.ts
     }
     await database.close();
     await tempDirectory.delete(recursive: true);
+  });
+
+  test('a paused TV applies backpressure to the provider', () async {
+    final paired = await _request(
+      client,
+      baseUri.resolve('pair'),
+      method: 'POST',
+      body: {
+        'code': server.pairing.pairingCode,
+        'deviceName': 'Backpressure test',
+      },
+    );
+    final token = paired.body['token'] as String;
+    final playback = await _request(
+      client,
+      baseUri.resolve('playback'),
+      method: 'POST',
+      token: token,
+      body: {'playlistId': 'playlist-1', 'type': 'live', 'itemId': 'channel-1'},
+    );
+    largeStream = true;
+    final response = await (await client.getUrl(
+      Uri.parse((playback.body['data'] as Map)['url'] as String),
+    )).close();
+    final received = Completer<void>();
+    late StreamSubscription<List<int>> subscription;
+    subscription = response.listen((_) {
+      subscription.pause();
+      if (!received.isCompleted) received.complete();
+    });
+    await received.future.timeout(const Duration(seconds: 5));
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(
+      producedChunks,
+      lessThan(2048),
+      reason:
+          'The proxy must not buffer the entire movie while the TV is paused',
+    );
+    await subscription.cancel();
   });
 
   test(

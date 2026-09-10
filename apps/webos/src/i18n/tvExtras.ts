@@ -3,6 +3,11 @@
 
 export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
   en: {
+    "tv.tracks.switching": "Switching track…",
+    "tv.tracks.selected": "Track selected. Press Back to return to playback.",
+    "tv.tracks.failed": "The player could not select this track. Try another track.",
+    "tv.tracks.empty": "No selectable audio tracks reported by this stream.",
+    "tv.tracks.hint": "Choose a track · Back returns to playback",
     "tv.channels_format": "{0} channels",
     "tv.autonext_now": "OK: play now · Back: cancel",
     "tv.results_format": "{0} results",
@@ -36,6 +41,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "Next: {0}",
   },
   tr: {
+    "tv.tracks.switching": "Parça değiştiriliyor…",
+    "tv.tracks.selected": "Parça seçildi. Oynatmaya dönmek için Geri tuşuna basın.",
+    "tv.tracks.failed": "Bu parça seçilemedi. Başka bir parça deneyin.",
+    "tv.tracks.empty": "Bu akış seçilebilir ses parçası bildirmiyor.",
+    "tv.tracks.hint": "Bir parça seçin · Geri ile oynatmaya dönün",
+
     "tv.hide_radio_stations": "Radyo istasyonlar\u0131n\u0131 gizle",
     "tv.channels_format": "{0} kanal",
     "tv.autonext_now": "OK: hemen başlat · Geri: iptal",
@@ -69,6 +80,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "Sıradaki: {0}",
   },
   de: {
+    "tv.tracks.switching": "Tonspur wird gewechselt…",
+    "tv.tracks.selected": "Spur ausgewählt. Zurück führt zur Wiedergabe.",
+    "tv.tracks.failed": "Diese Spur konnte nicht ausgewählt werden. Versuchen Sie eine andere.",
+    "tv.tracks.empty": "Dieser Stream meldet keine wählbaren Tonspuren.",
+    "tv.tracks.hint": "Spur wählen · Zurück zur Wiedergabe",
+
     "tv.hide_radio_stations": "Radiosender ausblenden",
     "tv.channels_format": "{0} Kanäle",
     "tv.autonext_now": "OK: jetzt abspielen · Zurück: abbrechen",
@@ -102,6 +119,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "Als Nächstes: {0}",
   },
   es: {
+    "tv.tracks.switching": "Cambiando pista…",
+    "tv.tracks.selected": "Pista seleccionada. Pulsa Atrás para volver a la reproducción.",
+    "tv.tracks.failed": "No se pudo seleccionar esta pista. Prueba otra.",
+    "tv.tracks.empty": "Esta emisión no ofrece pistas de audio seleccionables.",
+    "tv.tracks.hint": "Elige una pista · Atrás vuelve a la reproducción",
+
     "tv.hide_radio_stations": "Ocultar emisoras de radio",
     "tv.channels_format": "{0} canales",
     "tv.autonext_now": "OK: reproducir ahora · Atrás: cancelar",
@@ -135,6 +158,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "A continuación: {0}",
   },
   fr: {
+    "tv.tracks.switching": "Changement de piste…",
+    "tv.tracks.selected": "Piste sélectionnée. Appuyez sur Retour pour reprendre la lecture.",
+    "tv.tracks.failed": "Impossible de sélectionner cette piste. Essayez-en une autre.",
+    "tv.tracks.empty": "Ce flux ne signale aucune piste audio sélectionnable.",
+    "tv.tracks.hint": "Choisissez une piste · Retour pour revenir à la lecture",
+
     "tv.hide_radio_stations": "Masquer les stations de radio",
     "tv.channels_format": "{0} canaux",
     "tv.autonext_now": "OK : lire maintenant · Retour : annuler",
@@ -168,6 +197,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "À suivre : {0}",
   },
   pt: {
+    "tv.tracks.switching": "A mudar de faixa…",
+    "tv.tracks.selected": "Faixa selecionada. Prima Voltar para regressar à reprodução.",
+    "tv.tracks.failed": "Não foi possível selecionar esta faixa. Experimente outra.",
+    "tv.tracks.empty": "Esta transmissão não apresenta faixas de áudio selecionáveis.",
+    "tv.tracks.hint": "Escolha uma faixa · Voltar regressa à reprodução",
+
     "tv.hide_radio_stations": "Ocultar esta\u00e7\u00f5es de r\u00e1dio",
     "tv.channels_format": "{0} canais",
     "tv.autonext_now": "OK: reproduzir agora · Voltar: cancelar",
@@ -201,6 +236,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "A seguir: {0}",
   },
   ru: {
+    "tv.tracks.switching": "Переключение дорожки…",
+    "tv.tracks.selected": "Дорожка выбрана. Нажмите Назад для возврата к воспроизведению.",
+    "tv.tracks.failed": "Не удалось выбрать дорожку. Попробуйте другую.",
+    "tv.tracks.empty": "В этом потоке нет доступных для выбора аудиодорожек.",
+    "tv.tracks.hint": "Выберите дорожку · Назад — к воспроизведению",
+
     "tv.hide_radio_stations": "\u0421\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0434\u0438\u043e\u0441\u0442\u0430\u043d\u0446\u0438\u0438",
     "tv.channels_format": "Каналов: {0}",
     "tv.autonext_now": "OK: воспроизвести сейчас · Назад: отмена",
@@ -234,6 +275,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "Далее: {0}",
   },
   ar: {
+    "tv.tracks.switching": "جارٍ تبديل المسار…",
+    "tv.tracks.selected": "تم اختيار المسار. اضغط رجوع للعودة إلى التشغيل.",
+    "tv.tracks.failed": "تعذر على المشغّل اختيار هذا المسار. جرّب مسارًا آخر.",
+    "tv.tracks.empty": "لا يوفّر هذا البث مسارات صوت قابلة للاختيار.",
+    "tv.tracks.hint": "اختر مسارًا · رجوع للعودة إلى التشغيل",
+
     "tv.hide_radio_stations": "\u0625\u062e\u0641\u0627\u0621 \u0645\u062d\u0637\u0627\u062a \u0627\u0644\u0631\u0627\u062f\u064a\u0648",
     "tv.channels_format": "{0} قنوات",
     "tv.autonext_now": "OK: تشغيل الآن · رجوع: إلغاء",
@@ -267,6 +314,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "التالي: {0}",
   },
   hi: {
+    "tv.tracks.switching": "ट्रैक बदला जा रहा है…",
+    "tv.tracks.selected": "ट्रैक चुना गया। प्लेबैक पर लौटने के लिए वापस दबाएँ।",
+    "tv.tracks.failed": "यह ट्रैक नहीं चुना जा सका। दूसरा ट्रैक आज़माएँ।",
+    "tv.tracks.empty": "इस स्ट्रीम में चुनने योग्य ऑडियो ट्रैक उपलब्ध नहीं हैं।",
+    "tv.tracks.hint": "ट्रैक चुनें · वापस दबाकर प्लेबैक पर लौटें",
+
     "tv.hide_radio_stations": "\u0930\u0947\u0921\u093f\u092f\u094b \u0938\u094d\u091f\u0947\u0936\u0928 \u091b\u093f\u092a\u093e\u090f\u0902",
     "tv.channels_format": "{0} चैनल",
     "tv.autonext_now": "OK: अभी चलाएँ · वापस: रद्द करें",
@@ -300,6 +353,12 @@ export const TV_EXTRAS: { [lang: string]: { [key: string]: string } } = {
     "tv.epg.next_format": "अगला: {0}",
   },
   zh: {
+    "tv.tracks.switching": "正在切换音轨…",
+    "tv.tracks.selected": "已选择音轨。按返回键回到播放。",
+    "tv.tracks.failed": "播放器无法选择此音轨。请尝试其他音轨。",
+    "tv.tracks.empty": "此媒体流未提供可选择的音轨。",
+    "tv.tracks.hint": "选择音轨 · 按返回键回到播放",
+
     "tv.hide_radio_stations": "\u9690\u85cf\u5e7f\u64ad\u7535\u53f0",
     "tv.channels_format": "{0} 声道",
     "tv.autonext_now": "OK：立即播放 · 返回：取消",

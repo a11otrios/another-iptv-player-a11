@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyTrackPreferences } from "../src/player/trackPreferences";
+import { settings } from "../src/data/settings";
 import { WebOSVideoAdapter } from "../src/player/WebOSVideoAdapter";
 
 class FakeTrackList<T extends EventTarget> extends EventTarget {
@@ -332,4 +334,33 @@ describe("WebOSVideoAdapter", () => {
     expect(errors).toHaveBeenCalledWith({ message: "LG media pipeline stalled" });
     expect(adapter.getState()).toBe("idle");
   });
+  it("reports active tracks and late arrivals so language selection can be retried", async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+    settings.preferredAudioLanguage = "en-GB";
+    const adapter = new WebOSVideoAdapter();
+    adapter.mount(new FakeContainer() as unknown as HTMLElement);
+    await adapter.open({ url: "http://desktop/vod/1", isLive: false });
+    currentVideo().dispatchEvent(new Event("playing"));
+    applyTrackPreferences(adapter);
+    adapter.on("trackschange", () => applyTrackPreferences(adapter));
+    const german = Object.assign(new EventTarget(), { enabled: true, language: "deu", label: "German" });
+    const english = Object.assign(new EventTarget(), { enabled: false, language: "eng", label: "English" });
+    currentVideo().audioTracks.add(german);
+    currentVideo().audioTracks.add(english);
+    expect(adapter.getTracks().find(track => track.selected)?.language).toBe("eng");
+    expect(german.enabled).toBe(false);
+  });
+  it("does not claim a selection that the native player ignores", async () => {
+    const adapter = new WebOSVideoAdapter();
+    adapter.mount(new FakeContainer() as unknown as HTMLElement);
+    await adapter.open({ url: "http://desktop/vod/1", isLive: false });
+    const ignored = Object.assign(new EventTarget(), { language: "eng", label: "English" });
+    Object.defineProperty(ignored, "enabled", { get: () => false, set: () => {} });
+    currentVideo().audioTracks.add(ignored as EventTarget & { enabled: boolean; language: string; label: string });
+    expect(() => adapter.selectTrack("AUDIO", 0)).toThrow("rejected");
+    expect(adapter.getTracks()[0].selected).toBe(false);
+    expect(() => adapter.selectTrack("AUDIO", 1)).toThrow("unavailable");
+  });
+
 });

@@ -140,17 +140,21 @@ export class WebOSVideoAdapter implements PlayerPort {
   getTracks(): TrackInfo[] {
     const result: TrackInfo[] = [];
     const audio = this.video?.audioTracks;
-    if (audio) for (let i = 0; i < audio.length; i++) result.push({ type: "AUDIO", index: i, language: audio[i].language, label: audio[i].label || `Audio ${i + 1}` });
+    if (audio) for (let i = 0; i < audio.length; i++) result.push({ type: "AUDIO", index: i, language: audio[i].language, label: audio[i].label || audio[i].language || `Audio ${i + 1}`, selected: audio[i].enabled });
     const text = this.video?.textTracks;
-    if (text) for (let i = 0; i < text.length; i++) result.push({ type: "TEXT", index: i, language: text[i].language, label: text[i].label || `Subtitles ${i + 1}` });
+    if (text) for (let i = 0; i < text.length; i++) result.push({ type: "TEXT", index: i, language: text[i].language, label: text[i].label || text[i].language || `Subtitles ${i + 1}`, selected: text[i].mode !== "disabled" });
     return result;
   }
 
   selectTrack(type: TrackType, index: number): void {
     if (type === "AUDIO") {
       const tracks = this.video?.audioTracks;
-      if (!tracks || index < 0 || index >= tracks.length) return;
-      for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === index;
+      if (!tracks || index < 0 || index >= tracks.length) throw new Error("Audio track unavailable");
+      // Select the target first: disabling the sole active track first can
+      // make LG immediately reselect its default track.
+      tracks[index].enabled = true;
+      if (!tracks[index].enabled) throw new Error("Audio selection was rejected");
+      for (let i = 0; i < tracks.length; i++) if (i !== index) tracks[i].enabled = false;
     } else if (type === "TEXT") {
       const tracks = this.video?.textTracks;
       if (!tracks || index < 0 || index >= tracks.length) return;
@@ -266,6 +270,8 @@ export class WebOSVideoAdapter implements PlayerPort {
       this.emitTrackChange();
     });
     video.audioTracks?.addEventListener?.("addtrack", () => this.emitTrackChange());
+    video.audioTracks?.addEventListener?.("removetrack", () => this.emitTrackChange());
+    video.audioTracks?.addEventListener?.("change", () => this.emitTrackChange());
     video.textTracks?.addEventListener("addtrack", () => this.emitTrackChange());
     video.addEventListener("timeupdate", () => this.events.emit("timeupdate", { positionMs: this.getPositionMs() }));
     video.addEventListener("waiting", () => this.events.emit("buffering", { done: false }));
@@ -399,6 +405,7 @@ export class WebOSVideoAdapter implements PlayerPort {
   }
 
   private emitTrackChange(): void {
+    this.events.emit("trackschange", { tracks: this.getTracks() });
     const tracks = this.video?.textTracks;
     if (tracks) for (let i = 0; i < tracks.length; i++) {
       if (this.observedTextTracks.has(tracks[i])) continue;

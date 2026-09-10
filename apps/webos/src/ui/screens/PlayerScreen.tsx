@@ -26,7 +26,7 @@ import {
 } from "../../data/watchHistoryRepo";
 import { settings } from "../../data/settings";
 import { createPlayer } from "../../player/playerFactory";
-import { AspectMode, PlayerPort, PlayerState, TrackInfo } from "../../player/PlayerPort";
+import { PlayerPort, PlayerState, TrackInfo } from "../../player/PlayerPort";
 import {
   applyTrackPreferences,
   rememberSubtitlesOff,
@@ -68,7 +68,6 @@ import { Modal } from "../components/Modal";
 import { TrackSettingsPanel } from "../player/TrackSettingsPanel";
 import { OnlineSubtitlePanel } from "../player/OnlineSubtitlePanel";
 import { LiveChannelPanel } from "../player/LiveChannelPanel";
-import { getAspectMode, nextAspectMode, setAspectMode as saveAspectMode } from "../../player/aspectPreference";
 
 // Full player (phase 4): queue prev/next (episode nav & live zapping), track
 // settings with persisted language preference, app-drawn subtitles, next-
@@ -88,9 +87,9 @@ const SEEK_COMMIT_DELAY_MS = 450;
 const PLAYER_PLAY_KEY = "player-play-button";
 const PLAYER_SEEK_KEY = "player-seek-bar";
 const PLAYER_TRACKS_KEY = "player-tracks-button";
+const PLAYER_SUBTITLES_KEY = "player-subtitles-button";
 const PLAYER_FAV_KEY = "player-fav-button";
 const PLAYER_CHANNELS_KEY = "player-channels-button";
-const PLAYER_ASPECT_KEY = "player-aspect-button";
 const PLAYER_INFO_KEY = "player-info-button";
 const PLAYER_RETRY_KEY = "player-retry-button";
 
@@ -328,7 +327,6 @@ export function PlayerScreen({
   const [externalSubtitleLoaded, setExternalSubtitleLoaded] = useState(false);
   const [subtitleOffsetMs, setSubtitleOffsetMs] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
-  const [aspectMode, setAspectModeState] = useState<AspectMode>("contain");
   const [epgLine, setEpgLine] = useState<string | null>(null);
   const countdownTimer = useRef<number | undefined>(undefined);
   // Ref mirrors so the global keydown/back handlers can read panel/countdown
@@ -351,6 +349,10 @@ export function PlayerScreen({
   const seekStreakRef = useRef<SeekStreak>(IDLE_SEEK_STREAK);
   const lastShownSecond = useRef(-1);
   const prefsAppliedRef = useRef(false);
+  const manualTrackRef = useRef<{ AUDIO?: TrackInfo; TEXT?: TrackInfo }>({});
+  const trackSelectionEpoch = useRef(0);
+  const [trackStatus, setTrackStatus] = useState<string | null>(null);
+  const [trackSection, setTrackSection] = useState<"AUDIO" | "TEXT">("AUDIO");
   const compatibilityStageRef = useRef(0);
   const startupTimerRef = useRef<number | undefined>(undefined);
   const startupBaselineRef = useRef(0);
@@ -663,11 +665,11 @@ export function PlayerScreen({
       pendingSeekRef.current = null;
       lastShownSecond.current = -1;
       prefsAppliedRef.current = false;
+      manualTrackRef.current = {};
+      trackSelectionEpoch.current += 1;
+      setTrackStatus(null);
       window.clearTimeout(seekCommitTimer.current);
-      const streamKey = `${playlist.id}:${next.historyType}:${next.historyStreamId}`;
-      const savedAspect = getAspectMode(streamKey);
-      setAspectModeState(savedAspect);
-      player.setAspectMode(savedAspect);
+      player.setAspectMode("contain");
 
       const db = await getDb();
       const persistedResume = await getResumePositionMs(
@@ -803,6 +805,7 @@ export function PlayerScreen({
           if (cached && indexRef.current === nextIndex) {
             const track = await player.addExternalSubtitle(cached.url, cached.title, cached.language);
             player.setSubtitleOffset(cached.offsetMs);
+            manualTrackRef.current.TEXT = track;
             player.selectTrack("TEXT", track.index);
             textDisabledRef.current = false;
             setTextDisabled(false);
@@ -828,20 +831,50 @@ export function PlayerScreen({
     playerRef.current = player;
     if (containerRef.current) player.mount(containerRef.current);
 
+    let refreshingTracks = false;
+    let trackSignature = "";
+    const refreshTracks = (force = false) => {
+      if (refreshingTracks) return;
+      refreshingTracks = true;
+      try {
+        const currentTracks = player.getTracks();
+        const signature = JSON.stringify(currentTracks.map(({ type, index, language, label }) => ({ type, index, language, label })));
+        if ((force || signature !== trackSignature || !prefsAppliedRef.current) &&
+            (player.getState() === "playing" || player.getState() === "paused")) {
+          trackSignature = signature;
+          prefsAppliedRef.current = true;
+          const manual = manualTrackRef.current;
+          const { textEnabled } = applyTrackPreferences(player, { audio: !manual.AUDIO, text: !manual.TEXT });
+          for (const type of ["AUDIO", "TEXT"] as const) {
+            const desired = manual[type];
+            const found = desired && currentTracks.find(track => track.type === type && track.index === desired.index && track.language === desired.language);
+            if (found && !found.selected) {
+              try { player.selectTrack(type, found.index); } catch { /* UI keeps actual selection. */ }
+            }
+          }
+          if (!manual.TEXT) {
+            textDisabledRef.current = !textEnabled;
+            setTextDisabled(!textEnabled);
+          }
+        }
+        const actual = player.getTracks();
+        setTracks(previous => JSON.stringify(previous) === JSON.stringify(actual) ? previous : actual);
+        const selected: { AUDIO?: number; TEXT?: number; VIDEO?: number } = {};
+        for (const track of actual) if (track.selected) selected[track.type] = track.index;
+        setSelectedTracks(previous => JSON.stringify(previous) === JSON.stringify(selected) ? previous : selected);
+      } finally { refreshingTracks = false; }
+    };
+    // Some LG firmware omits track-list events; also poll while mounted.
+    const trackTimer = window.setInterval(() => refreshTracks(), 1000);
     const offs = [
+      () => window.clearInterval(trackTimer),
+      player.on("trackschange", () => refreshTracks()),
       player.on("statechange", ({ state: s }) => {
         setState(s);
-        // Track preferences only once playback runs: AVPlay rejects
-        // setSelectTrack outside PLAYING/PAUSED (INVALID_STATE).
-        if (s === "playing" && !prefsAppliedRef.current) {
-          prefsAppliedRef.current = true;
-          const { textEnabled } = applyTrackPreferences(player);
-          textDisabledRef.current = !textEnabled;
-          setTextDisabled(!textEnabled);
-          setTracks(player.getTracks());
-        }
+        if (s === "playing") refreshTracks(true);
       }),
       player.on("prepared", ({ durationMs: d }) => {
+        refreshTracks(true);
         const current = itemsRef.current[indexRef.current];
         const timelineDuration =
           d > 0 ? d + playbackTimelineOffsetRef.current : 0;
@@ -971,6 +1004,7 @@ export function PlayerScreen({
       window.clearInterval(historyTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       offs.forEach((off) => off());
+      trackSelectionEpoch.current += 1;
       player.destroy();
       playerRef.current = null;
       void finalHistory.finally(() => releaseActiveMediaSession());
@@ -1196,6 +1230,8 @@ export function PlayerScreen({
         stepSeek(1);
       } else if (colorPanel === "tracks") {
         setTracks(player.getTracks());
+        setTrackStatus(null);
+        setTrackSection("AUDIO");
         setPanel("tracks");
       } else if (
         colorPanel === "channels" &&
@@ -1204,12 +1240,6 @@ export function PlayerScreen({
         setPanel("channels");
       } else if (code === KEY.Red) {
         toggleFav();
-      } else if (code === KEY.Green) {
-        const current = items[indexRef.current];
-        const next = nextAspectMode(getAspectMode(`${playlist.id}:${current.historyType}:${current.historyStreamId}`));
-        player.setAspectMode(next);
-        saveAspectMode(`${playlist.id}:${current.historyType}:${current.historyStreamId}`, next);
-        setAspectModeState(next);
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -1238,7 +1268,7 @@ export function PlayerScreen({
           ? [PLAYER_CHANNELS_KEY]
           : []),
         PLAYER_TRACKS_KEY,
-        PLAYER_ASPECT_KEY,
+        PLAYER_SUBTITLES_KEY,
         PLAYER_INFO_KEY,
       ];
       const currentIndex = Math.min(
@@ -1263,14 +1293,32 @@ export function PlayerScreen({
     };
   }, [items, playlist.id, playlist.managedByServer, error, cancelCountdown, closePanel, cycleShortcutPage, showControls, flushHistory, pop, stepSeek, toggleFav, togglePlay]);
 
-  const selectTrack = useCallback((track: TrackInfo) => {
+  const selectTrack = useCallback(async (track: TrackInfo) => {
     const player = playerRef.current;
     if (!player) return;
     if (track.type === "TEXT") {
       textDisabledRef.current = false;
       setTextDisabled(false);
     }
-    player.selectTrack(track.type, track.index);
+    const epoch = ++trackSelectionEpoch.current;
+    setTrackStatus(t("tv.tracks.switching"));
+    // Suppress automatic preferences while a manual selection is pending.
+    if (track.type === "AUDIO" || track.type === "TEXT") manualTrackRef.current[track.type] = track;
+    try {
+      player.selectTrack(track.type, track.index);
+      await new Promise(resolve => window.setTimeout(resolve, 400));
+      if (epoch !== trackSelectionEpoch.current || player !== playerRef.current) return;
+      const actual = player.getTracks();
+      setTracks(actual);
+      if (!actual.some(candidate => candidate.type === track.type && candidate.index === track.index && candidate.selected)) {
+        setTrackStatus(t("tv.tracks.failed"));
+        return;
+      }
+    } catch {
+      if (epoch === trackSelectionEpoch.current) setTrackStatus(t("tv.tracks.failed"));
+      return;
+    }
+    setTrackStatus(t("tv.tracks.selected"));
     rememberTrackSelection(track);
     if (playlist.managedByServer && track.language) {
       const values = track.type === "AUDIO"
@@ -1286,6 +1334,9 @@ export function PlayerScreen({
   }, [playlist.id, playlist.managedByServer]);
 
   const disableText = useCallback(() => {
+    trackSelectionEpoch.current += 1;
+    setTrackStatus(null);
+    delete manualTrackRef.current.TEXT;
     textDisabledRef.current = true;
     setTextDisabled(true);
     setSubtitleText("");
@@ -1307,6 +1358,7 @@ export function PlayerScreen({
         descriptor.language,
       );
       player.setSubtitleOffset(descriptor.offsetMs);
+      manualTrackRef.current.TEXT = track;
       player.selectTrack("TEXT", track.index);
       textDisabledRef.current = false;
       setTextDisabled(false);
@@ -1351,14 +1403,7 @@ export function PlayerScreen({
     : favKey
       ? PLAYER_FAV_KEY
       : PLAYER_PLAY_KEY;
-  const cycleAspect = useCallback(() => {
-    const current = items[indexRef.current];
-    const streamKey = `${playlist.id}:${current.historyType}:${current.historyStreamId}`;
-    const next = nextAspectMode(aspectMode);
-    playerRef.current?.setAspectMode(next);
-    saveAspectMode(streamKey, next);
-    setAspectModeState(next);
-  }, [items, playlist.id, aspectMode]);
+
 
   const overlayShown =
     (controlsVisible || state !== "playing" || error !== null) &&
@@ -1467,32 +1512,25 @@ export function PlayerScreen({
                         focusKey={PLAYER_TRACKS_KEY}
                         onPress={() => {
                           setTracks(playerRef.current?.getTracks() ?? []);
+                          setTrackStatus(null);
+                          setTrackSection("AUDIO");
                           setPanel("tracks");
                         }}
                         leftKey={tracksLeftKey}
-                        rightKey={PLAYER_ASPECT_KEY}
+                        rightKey={PLAYER_SUBTITLES_KEY}
                         upKey={seekKey}
                       >
-                        ⚙
+                        {t("player.tracks.audio")}
                       </ChromeButton>
-                      <ChromeButton
-                        focusKey={PLAYER_ASPECT_KEY}
-                        onPress={cycleAspect}
-                        leftKey={PLAYER_TRACKS_KEY}
-                        rightKey={PLAYER_INFO_KEY}
-                        upKey={seekKey}
-                      >
-                        <span
-                          className="player-aspect-glyph"
-                          title={`Aspect: ${aspectMode}`}
-                        >
-                          16:9
-                        </span>
+                      <ChromeButton focusKey={PLAYER_SUBTITLES_KEY}
+                        onPress={() => { setTrackStatus(null); setTracks(playerRef.current?.getTracks() ?? []); setTrackSection("TEXT"); setPanel("tracks"); }}
+                        leftKey={PLAYER_TRACKS_KEY} rightKey={PLAYER_INFO_KEY} upKey={seekKey}>
+                        {t("player.tracks.subtitle")}
                       </ChromeButton>
                       <ChromeButton
                         focusKey={PLAYER_INFO_KEY}
                         onPress={() => setPanel("info")}
-                        leftKey={PLAYER_ASPECT_KEY}
+                        leftKey={PLAYER_SUBTITLES_KEY}
                         upKey={seekKey}
                       >
                         <span title={t("player.info.title")}>ⓘ</span>
@@ -1502,22 +1540,24 @@ export function PlayerScreen({
                 </>
               )}
               <p className="player-hints">
-                {`${t("player.tracks.title")}: ${t("tv.key.yellow")}`}
-                {` · ${t("player.all_channels")}: ${t("tv.key.blue")}`}
-                {` · 16:9: ${t("tv.key.green")}`}
+                {item.isLive
+                  ? `${t("player.all_channels")}: ${t("tv.key.yellow")} · ${t("tv.key.blue")}`
+                  : `${t("player.tracks.audio")}: ${t("tv.key.yellow")}`}
+
               </p>
             </div>
           </div>
         )}
 
       {panel === "tracks" && (
-        <Modal onDismiss={() => closePanel()}>
+        <Modal onDismiss={closePanel}>
           <TrackSettingsPanel
             tracks={tracks}
+            section={trackSection}
+            status={trackStatus}
             selected={selectedTracks}
             onSelectTrack={(track) => {
-              selectTrack(track);
-              closePanel();
+              void selectTrack(track);
             }}
             onDisableText={() => {
               disableText();

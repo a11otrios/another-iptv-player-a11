@@ -3,6 +3,7 @@ import {
   doesFocusableExist,
   setFocus,
 } from "@noriginmedia/norigin-spatial-navigation";
+import { withTimeout } from "./services/asyncTimeout";
 import { exitApp } from "./env/platform";
 import { getDb } from "./data/db";
 import { getPlaylist } from "./data/playlistRepo";
@@ -114,32 +115,37 @@ export function App() {
   // reopens a player: unexpected auto-play is especially disruptive on TV.
   useEffect(() => {
     void (async () => {
-      const client = ServerClient.connected();
+      const client = await ServerClient.restore();
       const lastId = settings.lastPlaylistId;
       const savedLocation = settings.lastLaunchLocation as LaunchLocation | null;
       const playlistId = savedLocation?.playlistId ?? lastId;
-      if (playlistId) {
-        const db = await getDb();
-        const playlist = await getPlaylist(db, playlistId);
-        if (playlist) {
-          const dashboard: ScreenDescriptor = { name: "dashboard", playlist };
-          const canRestore =
-            savedLocation?.playlistId === playlist.id &&
-            (await launchLocationExists(savedLocation, playlist.id));
-          // Seed the playlist list below the dashboard so Back remains
-          // predictable after a resumed category/detail screen.
-          if (canRestore && savedLocation.name !== "dashboard") {
-            reset(
-              { name: "playlists" },
-              dashboard,
-              screenFromLaunchLocation(savedLocation, playlist),
-            );
-          } else {
-            reset({ name: "playlists" }, dashboard);
+      try {
+        if (playlistId) {
+          const db = await withTimeout(getDb(), 3000);
+          const playlist = await withTimeout(getPlaylist(db, playlistId), 3000);
+          if (playlist) {
+            const dashboard: ScreenDescriptor = { name: "dashboard", playlist };
+            const canRestore =
+              savedLocation?.playlistId === playlist.id &&
+              (await withTimeout(launchLocationExists(savedLocation, playlist.id), 3000));
+            // Seed the playlist list below the dashboard so Back remains
+            // predictable after a resumed category/detail screen.
+            if (canRestore && savedLocation.name !== "dashboard") {
+              reset(
+                { name: "playlists" },
+                dashboard,
+                screenFromLaunchLocation(savedLocation, playlist),
+              );
+            } else {
+              reset({ name: "playlists" }, dashboard);
+            }
           }
         }
+      } catch {
+        // Keep the playlist/recovery controls reachable when TV storage fails.
+      } finally {
+        setBooted(true);
       }
-      setBooted(true);
       if (client) {
         try {
           await syncServerLibrary(client);

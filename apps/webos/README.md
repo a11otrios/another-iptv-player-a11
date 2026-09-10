@@ -60,7 +60,7 @@ menu and is not delivered to applications as a dependable key event.
 3. Open Developer Mode again, enable Key Server, then run
    `pnpm exec ares-novacom --device tv --getkey` and enter the six-character
    passphrase shown by the TV.
-4. Run `pnpm run package` to produce `com.devyorg.anotheriptvplayer_1.7.16_all.ipk`.
+4. Run `pnpm run package` to produce `com.devyorg.anotheriptvplayer_1.7.17_all.ipk`.
 5. Run `pnpm run tv:smoke -- --device tv`. This checks connectivity, installs
    the IPK, verifies the app ID, and launches it. Use a different device name if
    that is how the TV was configured.

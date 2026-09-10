@@ -3,6 +3,7 @@ import {
   FocusContext,
   useFocusable,
 } from "@noriginmedia/norigin-spatial-navigation";
+import { withTimeout } from "../../services/asyncTimeout";
 import { getDb } from "../../data/db";
 import { PlaylistRecord } from "../../data/records";
 import { deletePlaylist, getAllPlaylists } from "../../data/playlistRepo";
@@ -52,9 +53,14 @@ export function PlaylistListScreen() {
   const { ref, focusKey, focusSelf } = useFocusable({ trackChildren: true });
 
   const reload = useCallback(async () => {
-    const db = await getDb();
-    setPlaylists(await getAllPlaylists(db));
-    setLoaded(true);
+    try {
+      const db = await withTimeout(getDb(), 3000);
+      setPlaylists(await withTimeout(getAllPlaylists(db), 3000));
+    } catch {
+      setSyncError(t("tv.desktop.sync_error.storage"));
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   // Reload on every activation, not just mount: a playlist added while this

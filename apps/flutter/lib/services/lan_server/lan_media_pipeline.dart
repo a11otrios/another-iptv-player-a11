@@ -185,7 +185,9 @@ List<String> buildLanMediaArguments({
     '-map',
     '0:v:0?',
     '-map',
-    '0:a:0?',
+    // Retain every audio track so the TV can apply its language preference
+    // and offer manual alternatives in compatibility mode.
+    '0:a?',
     if (transcode) ...[
       '-c:v',
       'libx264',
