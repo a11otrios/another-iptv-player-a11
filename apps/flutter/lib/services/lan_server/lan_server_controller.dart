@@ -157,7 +157,20 @@ class LanServerController extends ChangeNotifier {
   }
 
   Future<void> _handle(HttpRequest request) async {
+    // Diagnostics are for native local tooling, never browser pages (including
+    // opaque/file origins). Do this before CORS and preflight handling.
+    if (request.uri.path == '/api/v1/local/pairing' &&
+        (request.connectionInfo?.remoteAddress.isLoopback != true ||
+            request.headers.value('Origin') != null ||
+            request.headers.value('Sec-Fetch-Site') != null)) {
+      await _errorJson(request.response, HttpStatus.forbidden, 'local_only',
+          'Pairing diagnostics are available only to local tools');
+      return;
+    }
     _applyCommonHeaders(request.response);
+    if (request.uri.path == '/api/v1/local/pairing') {
+      request.response.headers.removeAll(HttpHeaders.accessControlAllowOriginHeader);
+    }
     if (request.method == 'OPTIONS') {
       request.response.statusCode = HttpStatus.noContent;
       await request.response.close();

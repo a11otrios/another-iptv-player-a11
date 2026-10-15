@@ -34,6 +34,10 @@ class PlayerWidget extends StatefulWidget {
   final bool showInfo;
   final VoidCallback? onFullscreen;
   final List<ContentItem>? queue;
+  final bool startFromBeginning;
+  /// Supplies an isolated backend for lifecycle tests. This widget owns it.
+  @visibleForTesting
+  final Player Function()? playerFactory;
 
   const PlayerWidget({
     super.key,
@@ -43,6 +47,8 @@ class PlayerWidget extends StatefulWidget {
     this.showInfo = false,
     this.onFullscreen,
     this.queue,
+    this.startFromBeginning = false,
+    this.playerFactory,
   });
 
   @override
@@ -86,8 +92,8 @@ class _PlayerWidgetState extends State<PlayerWidget>
   late StreamSubscription subtitleTrackSubscription;
   late StreamSubscription externalSubtitleSubscription;
   late StreamSubscription subtitleOffsetSubscription;
-  late StreamSubscription contentItemIndexChangedSubscription;
-  late StreamSubscription _connectivitySubscription;
+  StreamSubscription? contentItemIndexChangedSubscription;
+  StreamSubscription? _connectivitySubscription;
   StreamSubscription<VideoParams>? _performanceVideoParamsSubscription;
 
   late Player _player;
@@ -110,7 +116,9 @@ class _PlayerWidgetState extends State<PlayerWidget>
   Timer? _watchHistoryTimer;
   Duration? _pendingWatchDuration;
   Duration? _pendingTotalDuration;
+  Duration? _lastObservedVodPosition;
   bool _isShortcutSwitching = false;
+  bool _isRestartingFromStart = false;
   String _shortcutPage = ChannelShortcutService.defaultPage;
   int? _surfacePointer;
   Offset? _surfacePointerStart;
@@ -131,7 +139,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
     // ----------------------------------------
 
     PlayerState.title = widget.contentItem.name;
-    _player = Player(configuration: PlayerConfiguration());
+    _player = widget.playerFactory?.call() ?? Player(configuration: PlayerConfiguration());
     watchHistoryService = WatchHistoryService();
 
     super.initState();
@@ -178,6 +186,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     // Cancel timer and save watch history one last time before disposing
     _watchHistoryTimer?.cancel();
@@ -198,14 +207,16 @@ class _PlayerWidgetState extends State<PlayerWidget>
     subtitleTrackSubscription.cancel();
     externalSubtitleSubscription.cancel();
     subtitleOffsetSubscription.cancel();
-    contentItemIndexChangedSubscription.cancel();
-    _connectivitySubscription.cancel();
+    contentItemIndexChangedSubscription?.cancel();
+    _connectivitySubscription?.cancel();
     _errorHandler.reset();
     super.dispose();
   }
 
   Future<void> _saveWatchHistory() async {
-    if (_pendingWatchDuration == null || !mounted) return;
+    final watchDuration = _pendingWatchDuration;
+    final totalDuration = _pendingTotalDuration;
+    if (watchDuration == null || !mounted) return;
 
     try {
       await watchHistoryService.saveWatchHistory(
@@ -218,13 +229,15 @@ class _PlayerWidgetState extends State<PlayerWidget>
           lastWatched: DateTime.now(),
           title: contentItem.name,
           imagePath: contentItem.imagePath,
-          totalDuration: _pendingTotalDuration,
-          watchDuration: _pendingWatchDuration,
+          totalDuration: totalDuration,
+          watchDuration: watchDuration,
           seriesId: contentItem.seriesStream?.seriesId,
         ),
       );
-      _pendingWatchDuration = null;
-      _pendingTotalDuration = null;
+      if (_pendingWatchDuration == watchDuration) {
+        _pendingWatchDuration = null;
+        _pendingTotalDuration = null;
+      }
     } catch (e) {
       // Silently handle database errors to prevent crashes
       // The next save attempt will retry
@@ -232,26 +245,99 @@ class _PlayerWidgetState extends State<PlayerWidget>
     }
   }
 
+  Future<void> _playFromStart() async {
+    if (_isRestartingFromStart ||
+        !mounted ||
+        contentItem.contentType == ContentType.liveStream) {
+      return;
+    }
+    _isRestartingFromStart = true;
+
+    final medias = List<Media>.of(_player.state.playlist.medias);
+    var index = _player.state.playlist.index;
+    if (index < 0 || index >= medias.length) {
+      medias
+        ..clear()
+        ..add(Media(contentItem.url));
+      index = 0;
+    } else {
+      medias[index] = Media(contentItem.url, start: Duration.zero);
+    }
+
+    _watchHistoryTimer?.cancel();
+    _watchHistoryTimer = null;
+    _pendingWatchDuration = null;
+    _pendingTotalDuration = null;
+    _lastObservedVodPosition = null;
+
+    try {
+      await _player.open(Playlist(medias, index: index), play: true);
+    } catch (error) {
+      debugPrint('Could not play from start: $error');
+      _showPlayerMessage('Could not play from start');
+      _isRestartingFromStart = false;
+      return;
+    }
+
+    try {
+      final playlistId = AppState.currentPlaylist?.id;
+      if (playlistId != null) {
+        final streamId = isXtreamCode
+            ? contentItem.id
+            : contentItem.m3uItem?.id ?? contentItem.id;
+        final history =
+            await watchHistoryService.getWatchHistory(playlistId, streamId) ??
+            WatchHistory(
+              playlistId: playlistId,
+              contentType: contentItem.contentType,
+              streamId: streamId,
+              lastWatched: DateTime.now(),
+              title: contentItem.name,
+              imagePath: contentItem.imagePath,
+              totalDuration: _player.state.duration,
+              seriesId: contentItem.seriesStream?.seriesId,
+            );
+        history
+          ..watchDuration = Duration.zero
+          ..lastWatched = DateTime.now();
+        await watchHistoryService.saveWatchHistory(history);
+      }
+      _showPlayerMessage('Playing from start');
+    } catch (error) {
+      debugPrint('Could not reset saved playback position: $error');
+      _showPlayerMessage('Playing from start; saved position was not reset');
+    } finally {
+      _isRestartingFromStart = false;
+    }
+  }
+
   Future<void> _initializePlayer() async {
     if (!mounted) return;
 
-    PlayerState.subtitleConfiguration = await getSubtitleConfiguration();
-
-    PlayerState.backgroundPlay = await UserPreferences.getBackgroundPlay();
+    final subtitleConfiguration = await getSubtitleConfiguration();
+    if (!mounted) return;
+    final backgroundPlay = await UserPreferences.getBackgroundPlay();
+    if (!mounted) return;
+    PlayerState.subtitleConfiguration = subtitleConfiguration;
+    PlayerState.backgroundPlay = backgroundPlay;
     _audioHandler.setPlayer(_player);
     _videoController = VideoController(_player);
     if (contentItem.contentType == ContentType.liveStream) {
       await _enableLiveStreamBuffering();
+      if (!mounted) return;
     }
     if (Platform.isWindows &&
         await UserPreferences.getWindowsPlaybackPerformanceMode()) {
+      if (!mounted) return;
       await _enableWindowsPlaybackPerformanceMode();
     }
+    if (!mounted) return;
 
     var watchHistory = await watchHistoryService.getWatchHistory(
       AppState.currentPlaylist!.id,
       isXtreamCode ? contentItem.id : contentItem.m3uItem?.id ?? contentItem.id,
     );
+    if (!mounted) return;
 
     List<MediaItem> mediaItems = [];
     var currentItemIndex = 0;
@@ -264,6 +350,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
           AppState.currentPlaylist!.id,
           isXtreamCode ? item.id : item.m3uItem?.id ?? item.id,
         );
+        if (!mounted) return;
 
         mediaItems.add(
           MediaItem(
@@ -278,7 +365,9 @@ class _PlayerWidgetState extends State<PlayerWidget>
             extras: {
               'url': item.url,
               'startPosition':
-                  itemWatchHistory?.watchDuration?.inMilliseconds ?? 0,
+                  widget.startFromBeginning && item.id == widget.contentItem.id
+                  ? 0
+                  : itemWatchHistory?.watchDuration?.inMilliseconds ?? 0,
             },
           ),
         );
@@ -303,6 +392,7 @@ class _PlayerWidgetState extends State<PlayerWidget>
       PlayerState.currentIndex = _currentItemIndex;
 
       await _audioHandler.setQueue(mediaItems, initialIndex: initialQueueIndex);
+      if (!mounted) return;
 
       if (contentItem.contentType != ContentType.liveStream) {
         var playlist = mediaItems.map((mediaItem) {
@@ -328,7 +418,9 @@ class _PlayerWidgetState extends State<PlayerWidget>
             : Uri.tryParse(contentItem.imagePath),
         extras: {
           'url': contentItem.url,
-          'startPosition': watchHistory?.watchDuration?.inMilliseconds ?? 0,
+          'startPosition': widget.startFromBeginning
+              ? 0
+              : watchHistory?.watchDuration?.inMilliseconds ?? 0,
         },
       );
 
@@ -337,18 +429,34 @@ class _PlayerWidgetState extends State<PlayerWidget>
       // }
 
       await _audioHandler.setQueue([mediaItem]);
+      if (!mounted) return;
 
       await _player.open(
         Playlist([
           Media(
             contentItem.url,
-            start: watchHistory?.watchDuration ?? Duration(),
+            start: widget.startFromBeginning
+                ? Duration.zero
+                : watchHistory?.watchDuration ?? Duration.zero,
           ),
         ]),
         play: true,
       );
     }
 
+    if (!mounted) return;
+    if (widget.startFromBeginning && watchHistory != null) {
+      try {
+        watchHistory
+          ..watchDuration = Duration.zero
+          ..lastWatched = DateTime.now();
+        await watchHistoryService.saveWatchHistory(watchHistory);
+      } catch (error) {
+        debugPrint('Could not reset saved playback position: $error');
+      }
+    }
+
+    if (!mounted) return;
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
       List<ConnectivityResult> results,
     ) async {
@@ -460,18 +568,35 @@ class _PlayerWidgetState extends State<PlayerWidget>
     });
 
     _player.stream.position.listen((position) {
-      _player.state.playlist.medias[currentItemIndex] = Media(
-        contentItem.url,
-        start: position,
-      );
+      if (contentItem.contentType != ContentType.liveStream) {
+        final previous = _lastObservedVodPosition;
+        _lastObservedVodPosition = position;
+        // A seek can report its target before any video has played there.
+        // Keep the last working checkpoint until the playback clock advances.
+        if (previous == null ||
+            position <= previous ||
+            position - previous > const Duration(seconds: 5) ||
+            _player.state.buffering) {
+          return;
+        }
+      }
 
-      // Debounce: Save watch history every 5 seconds instead of on every position update
+      if (currentItemIndex >= 0 &&
+          currentItemIndex < _player.state.playlist.medias.length) {
+        _player.state.playlist.medias[currentItemIndex] = Media(
+          contentItem.url,
+          start: position,
+        );
+      }
+
       _pendingWatchDuration = position;
       _pendingTotalDuration = _player.state.duration;
 
-      _watchHistoryTimer?.cancel();
-      _watchHistoryTimer = Timer(const Duration(seconds: 5), () {
-        _saveWatchHistory();
+      // Keep database writes away from short playback and buffering cycles.
+      // The latest position is also saved when leaving the player.
+      _watchHistoryTimer ??= Timer(const Duration(minutes: 1), () {
+        _watchHistoryTimer = null;
+        unawaited(_saveWatchHistory());
       });
     });
 
@@ -504,6 +629,10 @@ class _PlayerWidgetState extends State<PlayerWidget>
         return;
       }
 
+      if (_currentItemIndex != playlist.index) {
+        unawaited(_saveWatchHistory());
+        _lastObservedVodPosition = null;
+      }
       _currentItemIndex = playlist.index;
       currentItemIndex = _currentItemIndex;
       contentItem = _queue?[playlist.index] ?? widget.contentItem;
@@ -1358,6 +1487,11 @@ class _PlayerWidgetState extends State<PlayerWidget>
                   context,
                   _videoController!,
                   PlayerState.subtitleConfiguration,
+                  onPlayFromStart:
+                      Platform.isWindows &&
+                          contentItem.contentType != ContentType.liveStream
+                      ? () => unawaited(_playFromStart())
+                      : null,
                 ),
 
                 if (widget.onFullscreen != null &&

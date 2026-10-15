@@ -590,7 +590,8 @@ class LanLibraryService {
         'seasons': _groupEpisodes(
           episodes.map(
             (episode) => <String, Object?>{
-              'id': '${episode.seasonNumber}:${episode.episodeNumber}',
+              'id': _m3uEpisodeId(seriesId,
+                  '${episode.seasonNumber}:${episode.episodeNumber}'),
               'title': episode.name,
               'seasonNumber': episode.seasonNumber,
               'episodeNumber': episode.episodeNumber,
@@ -889,6 +890,9 @@ class LanLibraryService {
   Future<List<Map<String, Object?>>> history({
     required String playlistId,
   }) async {
+    if ((await _requirePlaylist(playlistId)).type == PlaylistType.m3u) {
+      await _migrateM3uEpisodeHistory(playlistId);
+    }
     final rows = await _history.getWatchHistoryByPlaylist(playlistId);
     return rows.map(_historyJson).toList();
   }
@@ -903,6 +907,14 @@ class LanLibraryService {
     int positionMs = 0,
     int durationMs = 0,
   }) async {
+    if (contentType == ContentType.series &&
+        (await _requirePlaylist(playlistId)).type == PlaylistType.m3u) {
+      if (seriesId == null || seriesId.isEmpty) {
+        throw const LanApiException(400, 'missing_series', 'Series identity is required');
+      }
+      itemId = _m3uEpisodeId(seriesId, _m3uEpisodeCoordinates(seriesId, itemId));
+      await _migrateM3uEpisodeHistory(playlistId);
+    }
     final history = WatchHistory(
       playlistId: playlistId,
       contentType: contentType,
@@ -937,6 +949,11 @@ class LanLibraryService {
     String? episodeId,
   }) async {
     final playlist = await _requirePlaylist(playlistId);
+    if (playlist.type == PlaylistType.m3u && contentType == ContentType.series) {
+      episodeId = _m3uEpisodeId(itemId,
+          _m3uEpisodeCoordinates(itemId, episodeId ?? ''));
+      await _migrateM3uEpisodeHistory(playlistId);
+    }
     final history = await _history.getWatchHistory(
       playlistId,
       episodeId ?? itemId,
@@ -944,7 +961,7 @@ class LanLibraryService {
 
     if (playlist.type == PlaylistType.m3u) {
       if (contentType == ContentType.series) {
-        final parts = (episodeId ?? '').split(':');
+        final parts = _m3uEpisodeCoordinates(itemId, episodeId!).split(':');
         if (parts.length != 2) {
           throw const LanApiException(
             400,
@@ -1045,6 +1062,26 @@ class LanLibraryService {
     }
   }
 
+  // Older TV versions used only season:episode. Preserve the surviving record
+  // under its stored series identity, without assigning it to another show.
+  Future<void> _migrateM3uEpisodeHistory(String playlistId) async {
+    await database.transaction(() async {
+      for (final row in await _history.getWatchHistoryByPlaylist(playlistId)) {
+        if (row.contentType != ContentType.series ||
+            row.seriesId == null || row.seriesId!.isEmpty ||
+            !RegExp(r'^\d+:\d+$').hasMatch(row.streamId)) continue;
+        final oldId = row.streamId;
+        final newId = _m3uEpisodeId(row.seriesId!, oldId);
+        final existing = await _history.getWatchHistory(playlistId, newId);
+        if (existing == null || row.lastWatched.isAfter(existing.lastWatched)) {
+          row.streamId = newId;
+          await _history.saveWatchHistory(row);
+        }
+        await _history.deleteWatchHistory(playlistId, oldId);
+      }
+    });
+  }
+
   Future<Playlist> _requirePlaylist(String playlistId) async {
     final playlist = await database.getPlaylistById(playlistId);
     if (playlist == null) {
@@ -1056,6 +1093,18 @@ class LanLibraryService {
     }
     return playlist;
   }
+}
+
+String _m3uEpisodeId(String seriesId, String coordinates) =>
+    'm3u:${Uri.encodeComponent(seriesId)}:$coordinates';
+
+String _m3uEpisodeCoordinates(String seriesId, String id) {
+  final prefix = 'm3u:${Uri.encodeComponent(seriesId)}:';
+  final coordinates = id.startsWith(prefix) ? id.substring(prefix.length) : id;
+  if (!RegExp(r'^\d+:\d+$').hasMatch(coordinates)) {
+    throw const LanApiException(400, 'invalid_episode', 'Episode identity is invalid for this series');
+  }
+  return coordinates;
 }
 
 ContentType contentTypeFromWire(String value) {

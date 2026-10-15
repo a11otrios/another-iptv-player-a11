@@ -1,11 +1,11 @@
 ; Self-contained Windows installer for Another IPTV Player.
 
 !ifndef APP_VERSION
-  !define APP_VERSION "1.7.6"
+  !define APP_VERSION "1.7.11"
 !endif
 
 !ifndef APP_BUILD
-  !define APP_BUILD "37"
+  !define APP_BUILD "42"
 !endif
 
 !ifndef VC_REDIST_PATH

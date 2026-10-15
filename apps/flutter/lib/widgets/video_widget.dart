@@ -23,11 +23,13 @@ import 'package:media_kit_video/media_kit_video.dart';
 class VideoWidget extends StatefulWidget {
   final VideoController controller;
   final SubtitleViewConfiguration subtitleViewConfiguration;
+  final VoidCallback? onPlayFromStart;
 
   const VideoWidget({
     super.key,
     required this.controller,
     required this.subtitleViewConfiguration,
+    this.onPlayFromStart,
   });
 
   @override
@@ -171,6 +173,15 @@ class _VideoWidgetState extends State<VideoWidget> {
     );
   }
 
+  Widget _buildPlayFromStartButton() {
+    return TextButton.icon(
+      onPressed: widget.onPlayFromStart,
+      icon: const Icon(Icons.restart_alt, size: 20),
+      label: const Text('Play from start'),
+      style: TextButton.styleFrom(foregroundColor: Colors.white),
+    );
+  }
+
   // Mirrors media_kit's default desktop keyboard shortcuts, but bumps the
   // left/right arrow seek from 2s to 5s. Providing this map replaces the
   // package defaults entirely, so every default binding is repeated here.
@@ -298,14 +309,15 @@ class _VideoWidgetState extends State<VideoWidget> {
               _buildAspectRatioButton(),
               VideoSettingsWidget(),
             ],
-            bottomButtonBar: const [
-              MaterialDesktopSkipPreviousButton(),
-              MaterialDesktopPlayOrPauseButton(),
-              MaterialDesktopSkipNextButton(),
-              MaterialDesktopVolumeButton(),
-              MaterialDesktopPositionIndicator(),
-              Expanded(child: VideoEpgWidget()),
-              MaterialDesktopFullscreenButton(),
+            bottomButtonBar: [
+              const MaterialDesktopSkipPreviousButton(),
+              const MaterialDesktopPlayOrPauseButton(),
+              const MaterialDesktopSkipNextButton(),
+              const MaterialDesktopVolumeButton(),
+              const MaterialDesktopPositionIndicator(),
+              if (widget.onPlayFromStart != null) _buildPlayFromStartButton(),
+              const Expanded(child: VideoEpgWidget()),
+              const MaterialDesktopFullscreenButton(),
             ],
           ),
           fullscreen: MaterialDesktopVideoControlsThemeData().copyWith(
@@ -326,14 +338,15 @@ class _VideoWidgetState extends State<VideoWidget> {
               _buildAspectRatioButton(),
               VideoSettingsWidget(),
             ],
-            bottomButtonBar: const [
-              MaterialDesktopSkipPreviousButton(),
-              MaterialDesktopPlayOrPauseButton(),
-              MaterialDesktopSkipNextButton(),
-              MaterialDesktopVolumeButton(),
-              MaterialDesktopPositionIndicator(),
-              Expanded(child: VideoEpgWidget()),
-              MaterialDesktopFullscreenButton(),
+            bottomButtonBar: [
+              const MaterialDesktopSkipPreviousButton(),
+              const MaterialDesktopPlayOrPauseButton(),
+              const MaterialDesktopSkipNextButton(),
+              const MaterialDesktopVolumeButton(),
+              const MaterialDesktopPositionIndicator(),
+              if (widget.onPlayFromStart != null) _buildPlayFromStartButton(),
+              const Expanded(child: VideoEpgWidget()),
+              const MaterialDesktopFullscreenButton(),
             ],
           ),
           child: Scaffold(
@@ -367,10 +380,12 @@ class _VideoWidgetState extends State<VideoWidget> {
 Widget getVideo(
   BuildContext context,
   VideoController controller,
-  SubtitleViewConfiguration subtitleViewConfiguration,
-) {
+  SubtitleViewConfiguration subtitleViewConfiguration, {
+  VoidCallback? onPlayFromStart,
+}) {
   return VideoWidget(
     controller: controller,
     subtitleViewConfiguration: subtitleViewConfiguration,
+    onPlayFromStart: onPlayFromStart,
   );
 }

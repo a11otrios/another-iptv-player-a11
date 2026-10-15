@@ -832,7 +832,7 @@ class _MovieScreenState extends State<MovieScreen> {
 
     children.add(
       ElevatedButton.icon(
-        onPressed: _openPlayer,
+        onPressed: () => _openPlayer(),
         style: ElevatedButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           backgroundColor: theme.colorScheme.primary,
@@ -853,6 +853,25 @@ class _MovieScreenState extends State<MovieScreen> {
         ),
       ),
     );
+
+    if (hasProgress) {
+      children.add(const SizedBox(height: 12));
+      children.add(
+        OutlinedButton.icon(
+          onPressed: () => _openPlayer(fromStart: true),
+          icon: const Icon(Icons.restart_alt),
+          label: const Text('Play from start'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.white,
+            side: const BorderSide(color: Colors.white70),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -905,11 +924,12 @@ class _MovieScreenState extends State<MovieScreen> {
     }
   }
 
-  void _openPlayer() {
+  void _openPlayer({bool fromStart = false}) {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => _MoviePlayerPage(
           contentItem: widget.contentItem,
+          startFromBeginning: fromStart,
           queue: _categoryMovies.isNotEmpty
               ? _categoryMovies
               : [widget.contentItem],
@@ -1019,8 +1039,13 @@ class _DetailCard extends StatelessWidget {
 class _MoviePlayerPage extends StatefulWidget {
   final ContentItem contentItem;
   final List<ContentItem> queue;
+  final bool startFromBeginning;
 
-  const _MoviePlayerPage({required this.contentItem, required this.queue});
+  const _MoviePlayerPage({
+    required this.contentItem,
+    required this.queue,
+    this.startFromBeginning = false,
+  });
 
   @override
   State<_MoviePlayerPage> createState() => _MoviePlayerPageState();
@@ -1068,6 +1093,7 @@ class _MoviePlayerPageState extends State<_MoviePlayerPage> {
           child: PlayerWidget(
             contentItem: widget.contentItem,
             queue: widget.queue,
+            startFromBeginning: widget.startFromBeginning,
           ),
         ),
       ),

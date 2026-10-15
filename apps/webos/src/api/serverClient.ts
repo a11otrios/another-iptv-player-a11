@@ -11,6 +11,41 @@ const CONNECTION_KEY = "aiptv.webos.server.v1";
 const CONNECTION_BACKUP_KEY = "serverConnectionV1";
 const CONNECTION_STORAGE_TIMEOUT_MS = 1500;
 let relocationInFlight: Promise<ServerConnection | null> | null = null;
+export const SERVER_REQUEST_TIMEOUT_MS = 15000;
+const PLAYBACK_REQUEST_TIMEOUT_MS = 60000;
+
+class ServerRequestTimeout extends Error {
+  constructor() { super("Desktop server request timed out"); }
+}
+
+// Race the complete response, including its body. Chromium 53 has no
+// AbortController; modern previews additionally cancel the underlying request.
+async function fetchJson(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = SERVER_REQUEST_TIMEOUT_MS,
+): Promise<{ response: Response; body: any }> {
+  const controller = typeof AbortController === "undefined" ? undefined : new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new ServerRequestTimeout());
+      controller?.abort();
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+        const body = response.status === 204 ? undefined : await response.json();
+        return { response, body };
+      })(),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface ServerConnection {
   baseUrl: string;
@@ -280,19 +315,18 @@ export class ServerClient {
 
   static async status(address: string): Promise<{ serverName: string }> {
     const baseUrl = normalizeServerUrl(address);
-    const response = await fetch(`${baseUrl}/status`);
+    const { response, body } = await fetchJson(`${baseUrl}/status`);
     if (!response.ok) throw new Error("Desktop server could not be reached");
-    return response.json();
+    return body;
   }
 
   static async pair(address: string, code: string, deviceName = "LG TV"): Promise<ServerClient> {
     const baseUrl = normalizeServerUrl(address);
-    const response = await fetch(`${baseUrl}/pair`, {
+    const { response, body } = await fetchJson(`${baseUrl}/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, deviceName }),
     });
-    const body = await response.json();
     if (!response.ok) throw new Error(body?.error?.message ?? "Pairing failed");
     const connection: ServerConnection = {
       baseUrl,
@@ -460,20 +494,23 @@ export class ServerClient {
   private get<T>(path: string): Promise<T> { return this.request(path); }
   private async request<T>(path: string, init: RequestInit = {}, allowRelocation = true): Promise<T> {
     let response: Response;
+    let body: Envelope<T>;
     try {
-      response = await fetch(`${this.connection.baseUrl}${path}`, {
+      ({ response, body } = await fetchJson(`${this.connection.baseUrl}${path}`, {
         ...init,
         headers: { Authorization: `Bearer ${this.connection.token}`, "Content-Type": "application/json", ...init.headers },
-      });
+      }, path === "/playback" ? PLAYBACK_REQUEST_TIMEOUT_MS : SERVER_REQUEST_TIMEOUT_MS));
     } catch (reason) {
       if (!allowRelocation) throw reason;
+      // A timed-out write may already have succeeded; never replay it.
+      if (reason instanceof SyntaxError ||
+          (reason instanceof ServerRequestTimeout && (init.method ?? "GET") !== "GET")) throw reason;
       const relocated = await relocateConnection(this.connection);
       if (!relocated) throw reason;
       this.connection = relocated;
       return this.request(path, init, false);
     }
     if (response.status === 204) return undefined as T;
-    const body = await response.json() as Envelope<T>;
     if (!response.ok) throw new Error(body.error?.message ?? `Server request failed (${response.status})`);
     return body.data;
   }
@@ -513,14 +550,13 @@ async function relocateConnection(connection: ServerConnection): Promise<ServerC
     for (const address of addresses) {
       const baseUrl = normalizeServerUrl(address);
       try {
-        const response = await fetch(`${baseUrl}/playlists`, {
+        const { response, body } = await fetchJson(`${baseUrl}/playlists`, {
           headers: {
             Authorization: `Bearer ${connection.token}`,
             "Content-Type": "application/json",
           },
         });
         if (!response.ok) continue;
-        const body = await response.json() as Envelope<ServerPlaylist[]>;
         if (!Array.isArray(body.data)) continue;
         const relocated = { ...connection, baseUrl };
         await persistServerConnection(relocated);

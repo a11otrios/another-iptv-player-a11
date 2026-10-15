@@ -1689,6 +1689,23 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(vodStreams, vodStreams.youtubeTrailer);
       }
     },
+    beforeOpen: (details) async {
+      // The home screen queries every category one by one. Without these
+      // indexes each query scans the whole streams table, which takes
+      // minutes on large libraries when the file is not in the OS cache.
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS idx_live_streams_playlist_category '
+        'ON live_streams (playlist_id, category_id)',
+      );
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS idx_vod_streams_playlist_category '
+        'ON vod_streams (playlist_id, category_id)',
+      );
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS idx_series_streams_playlist_category '
+        'ON series_streams (playlist_id, category_id)',
+      );
+    },
   );
 
   Future<void> deleteDatabase() async {

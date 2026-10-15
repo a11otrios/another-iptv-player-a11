@@ -2,8 +2,8 @@
 param(
   [string]$NsisPath,
   [string]$VcRedistPath,
-  [string]$Version = "1.7.4",
-  [string]$BuildNumber = "32"
+  [string]$Version = "1.7.11",
+  [string]$BuildNumber = "42"
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,5 +75,10 @@ $installerPath = Join-Path $outputDir "Another-IPTV-Player-Setup-$Version.exe"
 if (-not (Test-Path -LiteralPath $installerPath)) {
   throw "NSIS completed without creating the expected installer."
 }
+
+$programsDir = "E:\Onedrive\OneDrive - Yorg\OneDrive\Programs"
+New-Item -ItemType Directory -Force -Path $programsDir | Out-Null
+Copy-Item -LiteralPath $installerPath -Destination $programsDir -Force
+Write-Host "Copied installer to $programsDir"
 
 Get-Item -LiteralPath $installerPath

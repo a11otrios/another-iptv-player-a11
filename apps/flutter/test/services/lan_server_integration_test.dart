@@ -263,6 +263,31 @@ segment.ts
     await subscription.cancel();
   });
 
+  test('pairing diagnostics reject browser origins and preflights', () async {
+    for (final method in ['GET', 'OPTIONS']) {
+      for (final origin in ['https://example.invalid', 'null', baseUri.origin]) {
+        final request = await client.openUrl(method, baseUri.resolve('local/pairing'));
+        request.headers.set('Origin', origin);
+        final response = await request.close();
+        expect(response.statusCode, HttpStatus.forbidden);
+        expect(response.headers.value(HttpHeaders.accessControlAllowOriginHeader), isNull);
+        final body = jsonDecode(await utf8.decoder.bind(response).join()) as Map;
+        expect(body.containsKey('pairingCode'), isFalse);
+      }
+    }
+    final navigation = await client.getUrl(baseUri.resolve('local/pairing'));
+    navigation.headers.set('Sec-Fetch-Site', 'none');
+    final response = await navigation.close();
+    expect(response.statusCode, HttpStatus.forbidden);
+    await response.drain<void>();
+    // Native diagnostic tooling remains supported.
+    final native = await client.getUrl(baseUri.resolve('local/pairing'));
+    final nativeResponse = await native.close();
+    expect(nativeResponse.statusCode, HttpStatus.ok);
+    expect(nativeResponse.headers.value(HttpHeaders.accessControlAllowOriginHeader), isNull);
+    await nativeResponse.drain<void>();
+  });
+
   test(
     'pairs, syncs opaque catalog data, writes state, and revokes access',
     () async {
